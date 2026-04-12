@@ -1,0 +1,427 @@
+/**
+ * 毎朝のデイリーブリーフィング送信スクリプト
+ *
+ * 【セットアップ手順】
+ * 1. https://script.google.com にアクセス
+ * 2. 「新しいプロジェクト」を作成
+ * 3. このコードを貼り付けて保存
+ * 4. 左メニュー「サービス」→ + → Tasks API を追加
+ * 5. 「トリガーを追加」で毎朝7:30に実行するよう設定
+ * 6. 初回実行時にGmail・Calendar・Tasksへのアクセス許可を承認する
+ */
+
+// ==============================
+// 設定エリア（必要に応じて変更）
+// ==============================
+const CONFIG = {
+  SEND_TO:            "ken060720@gmail.com",   // 送信先（自分宛て）
+  SUBJECT_PREFIX:     "【本日やること】",         // 件名プレフィックス
+  DAYS_BACK_FOR_MAIL: 1,                       // 何日前からのメールをチェックするか
+  EXCLUDED_CATEGORIES: [                       // 除外するメールカテゴリ
+    "category:promotions",
+    "category:social"
+  ],
+  CALENDAR_IDS: [                              // チェックするカレンダーIDリスト
+    "ja.japanese#holiday@group.v.calendar.google.com",       // 日本の祝日
+    "primary",                                                // マイカレンダー
+    "glfucnvpajqi29e10ob0u249g0@group.calendar.google.com", // Work
+    "1m07r8pn05pn31qju9onm92b3k@group.calendar.google.com", // Trip
+    "p2tonq9nc5f2jofq6baku2s0f4@group.calendar.google.com", // Special day
+  ],
+  // ---カレンダー別カラー設定（カレンダーIDと対応する●の色）---
+  CALENDAR_COLORS: {
+    "ja.japanese#holiday@group.v.calendar.google.com": "#f83a22", // 日本の祝日
+    "primary":                                          "#42d692", // マイカレンダー
+    "glfucnvpajqi29e10ob0u249g0@group.calendar.google.com": "#5484ed", // Work
+    "1m07r8pn05pn31qju9onm92b3k@group.calendar.google.com": "#b99aff", // Trip
+    "p2tonq9nc5f2jofq6baku2s0f4@group.calendar.google.com": "#d06b64", // Special day
+  },
+  // ---ToDoリスト別カラー設定---
+  TASK_COLORS: {
+    "Private":  "#42d692", // 緑（指定）
+    "Work":     "#5484ed", // 青（指定）
+    "サブスク":  "#f4c430", // 黄（指定）
+    "本":       "#8d8d8d", // グレー
+  },
+  TASK_COLOR_DEFAULT: "#26a69a",           // 上記以外はティール
+};
+
+// ==============================
+// メイン処理
+// ==============================
+function sendDailyBriefing() {
+  const today   = new Date();
+  const dateStr = Utilities.formatDate(today, "Asia/Tokyo", "yyyy年M月d日(EEE)")
+    .replace("Mon","月").replace("Tue","火").replace("Wed","水")
+    .replace("Thu","木").replace("Fri","金").replace("Sat","土").replace("Sun","日");
+
+  const calendarSection = getCalendarSection(today);
+  const tasksSection    = getTasksSection();
+  const emailSection    = getEmailSection(today);
+
+  const htmlBody = buildHtmlEmail(dateStr, calendarSection, tasksSection, emailSection);
+
+  GmailApp.sendEmail(
+    CONFIG.SEND_TO,
+    CONFIG.SUBJECT_PREFIX + dateStr,
+    "HTMLメールが表示されない場合はGmailでご確認ください。",
+    { htmlBody: htmlBody }
+  );
+
+  Logger.log("デイリーブリーフィング送信完了: " + dateStr);
+}
+
+// ==============================
+// ToDoリスト（Tasks）の取得
+// ==============================
+function getTasksSection() {
+  const results = [];
+
+  try {
+    // タスクリスト一覧を取得（GAS Tasks APIの正しい呼び出し形式）
+    const taskListResponse = Tasks.Tasklists.list();
+    const taskLists = taskListResponse.items;
+    if (!taskLists || taskLists.length === 0) {
+      Logger.log("Tasks: タスクリストが0件");
+      return results;
+    }
+
+    Logger.log("Tasks: タスクリスト数 = " + taskLists.length);
+
+    const now = new Date();
+
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+
+    const oneWeekLater = new Date(todayStart);
+    oneWeekLater.setDate(oneWeekLater.getDate() + 7);
+    oneWeekLater.setHours(23, 59, 59, 999);
+
+    taskLists.forEach(function(list) {
+      try {
+        // GAS Tasks APIの正しいオプション渡し方
+        const taskResponse = Tasks.Tasks.list(list.id, {
+          showCompleted: false,
+          showHidden:    false,
+          maxResults:    100
+        });
+        const tasks = taskResponse.items;
+        Logger.log("Tasks: リスト[" + list.title + "] タスク数 = " + (tasks ? tasks.length : 0));
+        if (!tasks || tasks.length === 0) return;
+
+        tasks.forEach(function(task) {
+          if (task.status === "completed") return;
+          if (!task.title || task.title.trim() === "") return;
+          if (!task.due) return;
+
+          // dueはUTC 0時で返る（例: "2026-03-16T00:00:00.000Z"）
+          // そのままnew Date()すると日本時間09:00になるため、
+          // 日付文字列（YYYY-MM-DD）だけ取り出して日本時間0時として比較する
+          var dueDateStr = task.due.substring(0, 10); // "2026-03-16"
+          var dueParts   = dueDateStr.split("-");
+          var due        = new Date(
+            parseInt(dueParts[0]),
+            parseInt(dueParts[1]) - 1,
+            parseInt(dueParts[2]),
+            0, 0, 0, 0
+          );
+
+          var isOverdue    = due < todayStart;
+          var isWithinWeek = due <= oneWeekLater;
+
+          Logger.log("Tasks: タスク[" + task.title + "] due=" + dueDateStr + " overdue=" + isOverdue + " withinWeek=" + isWithinWeek);
+
+          if (!isOverdue && !isWithinWeek) return;
+
+          var isToday = !isOverdue && (due.getTime() === todayStart.getTime());
+          var taskColor = CONFIG.TASK_COLORS[list.title] || CONFIG.TASK_COLOR_DEFAULT;
+
+          results.push({
+            title:     task.title,
+            listName:  list.title,
+            dueDate:   Utilities.formatDate(due, "Asia/Tokyo", "M/d"),
+            isOverdue: isOverdue,
+            isToday:   isToday,
+            color:     taskColor,
+            notes:     task.notes ? task.notes.substring(0, 60) : ""
+          });
+        });
+      } catch(listErr) {
+        Logger.log("Tasks: リスト[" + list.title + "]の取得エラー: " + listErr.message);
+      }
+    });
+
+    Logger.log("Tasks: 最終結果件数 = " + results.length);
+
+  } catch(e) {
+    Logger.log("Tasks取得エラー: " + e.message);
+  }
+
+  return results;
+}
+
+// ==============================
+// カレンダー情報の取得
+// ==============================
+function getCalendarSection(today) {
+  const startOfDay = new Date(today);
+  startOfDay.setHours(0, 0, 0, 0);
+
+  const endOfDay = new Date(today);
+  endOfDay.setHours(23, 59, 59, 999);
+
+  let events = [];
+
+  CONFIG.CALENDAR_IDS.forEach(calId => {
+    try {
+      const cal = CalendarApp.getCalendarById(
+        calId === "primary" ? Session.getActiveUser().getEmail() : calId
+      );
+      if (!cal) return;
+
+      var calColor = CONFIG.CALENDAR_COLORS[calId] || "#aaaaaa";
+      cal.getEvents(startOfDay, endOfDay).forEach(e => {
+        events.push({
+          title:    e.getTitle(),
+          start:    e.isAllDayEvent() ? "終日" : Utilities.formatDate(e.getStartTime(), "Asia/Tokyo", "HH:mm"),
+          end:      e.isAllDayEvent() ? ""     : Utilities.formatDate(e.getEndTime(),   "Asia/Tokyo", "HH:mm"),
+          location: e.getLocation() || "",
+          allDay:   e.isAllDayEvent(),
+          color:    calColor
+        });
+      });
+    } catch(e) {
+      Logger.log("カレンダー取得エラー (" + calId + "): " + e.message);
+    }
+  });
+
+  const seen = new Set();
+  events = events.filter(ev => {
+    const key = ev.title + ev.start;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  events.sort((a, b) => {
+    if (a.allDay && !b.allDay) return -1;
+    if (!a.allDay && b.allDay) return 1;
+    return a.start.localeCompare(b.start);
+  });
+
+  return events;
+}
+
+// ==============================
+// メール情報の取得
+// ==============================
+function getEmailSection(today) {
+  const since = new Date(today);
+  since.setDate(since.getDate() - CONFIG.DAYS_BACK_FOR_MAIL);
+  since.setHours(0, 0, 0, 0);
+
+  const afterStr = Utilities.formatDate(since, "Asia/Tokyo", "yyyy/MM/dd");
+  const excludes = CONFIG.EXCLUDED_CATEGORIES.join(" -");
+  const query    = `after:${afterStr} -${excludes} -from:me`;
+
+  const threads = GmailApp.search(query, 0, 30);
+  const results = [];
+
+  threads.forEach(thread => {
+    const messages   = thread.getMessages();
+    const last       = messages[messages.length - 1];
+    const isUnread   = thread.isUnread();
+    const isImportant = thread.isImportant();
+
+    if (!isUnread && !isImportant) return;
+
+    results.push({
+      subject:     thread.getFirstMessageSubject(),
+      from:        last.getFrom(),
+      date:        Utilities.formatDate(last.getDate(), "Asia/Tokyo", "M/d HH:mm"),
+      isUnread:    isUnread,
+      isImportant: isImportant,
+      snippet:     last.getPlainBody().substring(0, 120).replace(/\s+/g, " ").trim() + "...",
+      link:        "https://mail.google.com/mail/u/0/#inbox/" + thread.getId()
+    });
+  });
+
+  return results;
+}
+
+// ==============================
+// HTMLメール本文の組み立て
+// ==============================
+function buildHtmlEmail(dateStr, events, tasks, emails) {
+  const eventsHtml  = buildEventsHtml(events);
+  const tasksHtml   = buildTasksHtml(tasks);
+  const emailsHtml  = buildEmailsHtml(emails);
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  body { font-family: 'Hiragino Sans', 'Meiryo', sans-serif; font-size: 14px; color: #222; background: #f5f5f5; margin: 0; padding: 0; }
+  .container { max-width: 640px; margin: 20px auto; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+  .header { background: #1a73e8; color: #fff; padding: 20px 24px; }
+  .header h1 { margin: 0; font-size: 18px; font-weight: bold; }
+  .header p  { margin: 4px 0 0; font-size: 13px; opacity: 0.85; }
+  .section { padding: 16px 24px; border-bottom: 1px solid #eee; }
+  .section:last-child { border-bottom: none; }
+  .section-title { font-size: 13px; font-weight: bold; color: #1a73e8; margin: 0 0 10px; letter-spacing: 0.5px; }
+  /* 予定 */
+  .event-item { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
+  .event-item:last-child { border-bottom: none; }
+  .event-dot { font-size: 12px; flex-shrink: 0; }
+  .event-time { min-width: 90px; font-size: 13px; font-weight: bold; color: #555; flex-shrink: 0; }
+  .event-title { font-size: 14px; color: #222; }
+  .event-location { font-size: 12px; color: #888; margin-top: 2px; }
+  /* ToDo */
+  .task-section-label { font-size: 11px; font-weight: bold; padding: 4px 8px; border-radius: 4px; margin: 10px 0 4px; display: inline-block; }
+  .task-label-overdue { background: #fce8e6; color: #d93025; }
+  .task-label-today   { background: #e6f4ea; color: #1e8e3e; }
+  .task-label-future  { background: #e8f0fe; color: #1a73e8; }
+  .task-item { display: flex; align-items: flex-start; gap: 6px; padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
+  .task-item:last-child { border-bottom: none; }
+  .task-dot { font-size: 11px; margin-top: 3px; flex-shrink: 0; }
+  .task-checkbox { font-size: 15px; margin-top: 1px; flex-shrink: 0; }
+  .task-title { font-size: 14px; color: #222; }
+  .task-meta { font-size: 12px; color: #888; margin-top: 2px; }
+  .task-list-name { font-weight: bold; }
+  .task-overdue { color: #d93025; font-weight: bold; }
+  .task-date { color: #555; }
+  .task-notes { font-size: 12px; color: #555; margin-top: 2px; }
+  .no-data { font-size: 13px; color: #999; padding: 8px 0; }
+  /* メール */
+  .mail-item { padding: 10px 0; border-bottom: 1px solid #f0f0f0; }
+  .mail-item:last-child { border-bottom: none; }
+  .mail-subject { font-size: 14px; font-weight: bold; color: #222; }
+  .mail-subject a { color: #1a73e8; text-decoration: none; }
+  .mail-meta { font-size: 12px; color: #888; margin-top: 3px; }
+  .mail-snippet { font-size: 12px; color: #555; margin-top: 4px; line-height: 1.5; }
+  .badge { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 10px; margin-left: 6px; vertical-align: middle; }
+  .badge-unread { background: #e8f0fe; color: #1a73e8; }
+  .badge-important { background: #fce8e6; color: #d93025; }
+  .footer { background: #f8f9fa; padding: 12px 24px; font-size: 11px; color: #aaa; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>デイリーブリーフィング</h1>
+    <p>${dateStr}</p>
+  </div>
+
+  <div class="section">
+    <div class="section-title">[予定] 今日の予定</div>
+    ${eventsHtml}
+  </div>
+
+  <div class="section">
+    <div class="section-title">[TODO] ToDoリスト（未完了タスク）</div>
+    ${tasksHtml}
+  </div>
+
+  <div class="section">
+    <div class="section-title">[メール] 重要メール（昨日〜現在）</div>
+    ${emailsHtml}
+  </div>
+
+  <div class="footer">
+    このメールはGoogle Apps Scriptにより自動送信されています
+  </div>
+</div>
+</body>
+</html>`;
+}
+
+function buildEventsHtml(events) {
+  if (events.length === 0) {
+    return '<div class="no-data">今日の予定はありません</div>';
+  }
+
+  return events.map(ev => {
+    const timeLabel = ev.allDay ? "終日" : `${ev.start}〜${ev.end}`;
+    const locHtml   = ev.location
+      ? `<div class="event-location">${ev.location}</div>`
+      : "";
+    const dotColor  = ev.color || "#aaaaaa";
+    return `
+    <div class="event-item">
+      <div class="event-dot" style="color:${dotColor};">&#9679;</div>
+      <div class="event-time">${timeLabel}</div>
+      <div>
+        <div class="event-title">${ev.title}</div>
+        ${locHtml}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function buildTasksHtml(tasks) {
+  if (tasks.length === 0) {
+    return '<div class="no-data">対象タスクはありません</div>';
+  }
+
+  // 3分類に振り分け
+  const overdueTasks = tasks.filter(t => t.isOverdue);
+  const todayTasks   = tasks.filter(t => t.isToday);
+  const futureTasks  = tasks.filter(t => !t.isOverdue && !t.isToday);
+
+  function renderTask(t) {
+    const dotColor  = t.color || "#9e9e9e";
+    const dateLabel = t.isOverdue
+      ? `<span class="task-overdue">[期限切れ] ${t.dueDate}</span>`
+      : `<span class="task-date">期日: ${t.dueDate}</span>`;
+    const metaHtml  = `<div class="task-meta"><span class="task-list-name">${t.listName}</span> ・ ${dateLabel}</div>`;
+    const notesHtml = t.notes ? `<div class="task-notes">${t.notes}</div>` : "";
+    return `
+    <div class="task-item">
+      <div class="task-dot" style="color:${dotColor};">&#9679;</div>
+      <div class="task-checkbox">&#9744;</div>
+      <div>
+        <div class="task-title">${t.title}</div>
+        ${metaHtml}
+        ${notesHtml}
+      </div>
+    </div>`;
+  }
+
+  var html = "";
+
+  if (overdueTasks.length > 0) {
+    html += '<div class="task-section-label task-label-overdue">[期限切れ] 未完了タスク</div>';
+    html += overdueTasks.map(renderTask).join("");
+  }
+  if (todayTasks.length > 0) {
+    html += '<div class="task-section-label task-label-today">[今日] 本日が期日のタスク</div>';
+    html += todayTasks.map(renderTask).join("");
+  }
+  if (futureTasks.length > 0) {
+    html += '<div class="task-section-label task-label-future">[今後] 今後1週間のタスク</div>';
+    html += futureTasks.map(renderTask).join("");
+  }
+
+  return html;
+}
+
+function buildEmailsHtml(emails) {
+  if (emails.length === 0) {
+    return '<div class="no-data">重要なメールはありません</div>';
+  }
+
+  return emails.map(m => {
+    const unreadBadge    = m.isUnread    ? '<span class="badge badge-unread">未読</span>'    : "";
+    const importantBadge = m.isImportant ? '<span class="badge badge-important">重要</span>' : "";
+    return `
+    <div class="mail-item">
+      <div class="mail-subject">
+        <a href="${m.link}">${m.subject}</a>${unreadBadge}${importantBadge}
+      </div>
+      <div class="mail-meta">差出人: ${m.from} ・ ${m.date}</div>
+      <div class="mail-snippet">${m.snippet}</div>
+    </div>`;
+  }).join("");
+}
