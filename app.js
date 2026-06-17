@@ -400,18 +400,56 @@ function normalizeWeather(data) {
   const current = data.current || {};
   const code = Number(current.weather_code ?? daily.weather_code?.[0] ?? 0);
   const weather = weatherCodeToText(code);
+  const tempNow = Math.round(current.temperature_2m ?? daily.temperature_2m_max?.[0] ?? 0);
+  const tempMax = Math.round(daily.temperature_2m_max?.[0] ?? 0);
+  const tempMin = Math.round(daily.temperature_2m_min?.[0] ?? 0);
+  const rain = Math.round(daily.precipitation_probability_max?.[0] ?? 0);
+  const wind = Math.round(daily.wind_speed_10m_max?.[0] ?? current.wind_speed_10m ?? 0);
+  const uv = Math.round(daily.uv_index_max?.[0] ?? 0);
+  const laundry = getLaundryIndex({ code, tempMax, rain, wind, uv });
 
   return {
     code,
     emoji: weather.emoji,
     label: weather.label,
-    tempNow: Math.round(current.temperature_2m ?? daily.temperature_2m_max?.[0] ?? 0),
-    tempMax: Math.round(daily.temperature_2m_max?.[0] ?? 0),
-    tempMin: Math.round(daily.temperature_2m_min?.[0] ?? 0),
-    rain: Math.round(daily.precipitation_probability_max?.[0] ?? 0),
-    wind: Math.round(daily.wind_speed_10m_max?.[0] ?? current.wind_speed_10m ?? 0),
-    uv: Math.round(daily.uv_index_max?.[0] ?? 0)
+    tempNow,
+    tempMax,
+    tempMin,
+    rain,
+    wind,
+    uv,
+    laundry
   };
+}
+
+function getLaundryIndex({ code, tempMax, rain, wind, uv }) {
+  let score = 55;
+
+  if (rain >= 70) score -= 55;
+  else if (rain >= 50) score -= 38;
+  else if (rain >= 35) score -= 24;
+  else if (rain <= 20) score += 12;
+
+  if ([61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99].includes(code)) score -= 35;
+  if ([0, 1].includes(code)) score += 18;
+  else if (code === 2) score += 8;
+  else if (code === 3) score -= 8;
+
+  if (tempMax >= 28) score += 18;
+  else if (tempMax >= 23) score += 12;
+  else if (tempMax <= 15) score -= 10;
+
+  if (wind >= 35) score -= 12;
+  else if (wind >= 12) score += 8;
+
+  if (uv >= 6) score += 8;
+  score = Math.max(0, Math.min(100, score));
+
+  if (score >= 80) return { score, emoji: "🌞", label: "よく乾く", advice: "洗濯日和。厚手の物も外干ししやすいです。" };
+  if (score >= 60) return { score, emoji: "👕", label: "乾きやすい", advice: "外干しOK。夕方までに取り込むと安心です。" };
+  if (score >= 40) return { score, emoji: "🌥️", label: "やや乾きにくい", advice: "薄手中心がおすすめ。厚手は部屋干し併用が安心です。" };
+  if (score >= 20) return { score, emoji: "🏠", label: "部屋干し推奨", advice: "外干しは微妙。除湿機・浴室乾燥が安心です。" };
+  return { score, emoji: "☔", label: "乾きにくい", advice: "洗濯は控えめに。必要なら室内干し＋除湿がおすすめです。" };
 }
 
 function weatherCodeToText(code) {
@@ -473,6 +511,7 @@ function renderClothes() {
   else if (w.rain >= 35) tips.push("🌂 折りたたみ傘を持つと安心");
   else tips.push("🟢 雨の心配は低め。身軽に動けそう");
 
+  if (w.laundry) tips.push(`${w.laundry.emoji} 洗濯指数：${w.laundry.score}点・${w.laundry.label}。${w.laundry.advice}`);
   if (w.wind >= 35) tips.push("💨 風が強め。帽子や軽い傘は注意");
   if (w.uv >= 6) tips.push("🕶️ 紫外線対策：日焼け止め・サングラス推奨");
   if (Math.abs(w.tempMax - w.tempMin) >= 8) tips.push("🌡️ 寒暖差注意：脱ぎ着しやすい服が便利");
@@ -573,6 +612,8 @@ function renderDailyAdvice() {
   advice.push("🚀 まずやる：朝のうちに今日の予定と重要メールを確認");
   if (state.mails.some((m) => m.level === "high")) advice.push("🔴 メール：本文から重要と判定されたメールを先に処理。返信・支払い・予約変更を優先");
   if (state.events.length) advice.push("📅 予定：予定前後の移動時間を確保。天気に合わせて早めに出発");
+  if (w.laundry?.score >= 60) advice.push(`👕 洗濯：${w.laundry.label}。早めに干すと効率よく乾きそう`);
+  else if (w.laundry) advice.push(`🏠 洗濯：${w.laundry.label}。部屋干し・乾燥機も検討`);
   if (w.rain >= 35) advice.push("☔ 外出前：傘を準備。移動時間も少し余裕を持つ");
   if (w.tempMax >= 30) advice.push("🥤 体調管理：暑さ対策と水分補給を優先");
   if (w.wind >= 35) advice.push("🚗 移動：風が強いので徒歩・自転車・傘利用に注意");
