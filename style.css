@@ -66,23 +66,27 @@ h2 {
 }
 
 .today-label {
-  margin-bottom: 18px;
+  margin-bottom: 14px;
   color: rgba(255, 255, 255, 0.82);
 }
 
 .hero__actions {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  align-items: stretch;
 }
 
 button {
   border: none;
   border-radius: 999px;
-  padding: 13px 16px;
+  padding: 9px 6px;
+  min-height: 42px;
   font-weight: 800;
-  font-size: 1rem;
+  font-size: 0.78rem;
+  line-height: 1.15;
   cursor: pointer;
+  white-space: normal;
 }
 
 button:disabled {
@@ -102,8 +106,8 @@ button:disabled {
 }
 
 .status-line {
-  margin: 14px 0 0;
-  font-size: 0.92rem;
+  margin: 10px 0 0;
+  font-size: 0.84rem;
   color: rgba(255, 255, 255, 0.78);
 }
 
@@ -270,7 +274,8 @@ button:disabled {
 @media (min-width: 720px) {
   .app-shell { padding: 24px; }
   .hero { position: static; padding: 30px; }
-  .hero__actions { grid-template-columns: repeat(3, max-content); }
+  .hero__actions { grid-template-columns: repeat(3, max-content); gap: 10px; }
+  button { padding: 13px 16px; min-height: auto; font-size: 1rem; white-space: nowrap; }
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   .priority-card, .advice-card { grid-column: 1 / -1; }
   .metric-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
