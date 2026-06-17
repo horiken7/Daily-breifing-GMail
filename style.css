@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#101827" />
+  <title>KEN's Daily Briefing</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="hero">
+      <div class="hero__label">📱 Daily Briefing</div>
+      <h1>KEN's Daily Briefing</h1>
+      <p id="todayLabel" class="today-label">今日の情報を準備中...</p>
+      <div class="hero__actions">
+        <button id="refreshBtn" class="primary-btn">🔄 最新に更新</button>
+        <button id="locationBtn" class="ghost-btn">📍 現在地で天気</button>
+        <button id="googleBtn" class="ghost-btn">🔐 Google連携</button>
+      </div>
+      <p id="statusLine" class="status-line">☕ 起動中...</p>
+    </header>
+
+    <main class="grid">
+      <section class="card priority-card" aria-labelledby="priorityTitle">
+        <div class="card-title-row">
+          <h2 id="priorityTitle">🔴 今日の重要事項</h2>
+          <span id="priorityBadge" class="badge badge-red">確認中</span>
+        </div>
+        <div id="priorityList" class="item-list skeleton-lines">
+          <p>情報を集めています...</p>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="weatherTitle">
+        <div class="card-title-row">
+          <h2 id="weatherTitle">☀️ 今日の天気</h2>
+          <span id="weatherPlace" class="badge">現在地</span>
+        </div>
+        <div id="weatherSummary" class="weather-main">
+          <div class="weather-icon">🌤️</div>
+          <div>
+            <p class="weather-name">天気を取得中...</p>
+            <p class="muted">位置情報の許可で精度が上がります</p>
+          </div>
+        </div>
+        <div id="weatherMetrics" class="metric-grid"></div>
+      </section>
+
+      <section class="card" aria-labelledby="clothesTitle">
+        <h2 id="clothesTitle">👕 服装アドバイス</h2>
+        <div id="clothesAdvice" class="chip-list">
+          <span class="chip">🌡️ 気温を確認中</span>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="calendarTitle">
+        <div class="card-title-row">
+          <h2 id="calendarTitle">📅 今日の予定</h2>
+          <span id="calendarBadge" class="badge">未接続</span>
+        </div>
+        <div id="calendarList" class="item-list">
+          <p class="muted">🔐 Google連携後、今日の予定を表示します。</p>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="gmailTitle">
+        <div class="card-title-row">
+          <h2 id="gmailTitle">📩 重要メール</h2>
+          <span id="gmailBadge" class="badge">未接続</span>
+        </div>
+        <div id="gmailList" class="item-list">
+          <p class="muted">🔐 Google連携後、直近2日の重要そうなメールを要約します。</p>
+        </div>
+      </section>
+
+      <section class="card advice-card" aria-labelledby="adviceTitle">
+        <h2 id="adviceTitle">🧭 今日の過ごし方</h2>
+        <div id="dailyAdvice" class="advice-list">
+          <p>☕ まずは天気を確認して、今日の動き方を組み立てます。</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer-note">
+      <p>🔒 Google連携は読み取り専用です。Gmail本文は取得せず、件名・差出人・スニペット中心で判定します。</p>
+    </footer>
+  </div>
+
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="./config.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
