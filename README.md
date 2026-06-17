@@ -6,8 +6,8 @@
 
 - ☀️ 現在地または初期地点の天気表示
 - 👕 気温・雨・風・UVから服装アドバイス
-- 📅 Googleカレンダーから今日の予定を表示するための枠
-- 📩 Gmailから重要メールを表示するための枠
+- 📅 Googleカレンダーから今日の予定を表示
+- 📩 Gmailから重要そうなメールを抽出して表示
 - 🧭 天気・予定・メールから今日の過ごし方を提案
 - 🔴 🟡 🟢 絵文字とラベルでスマホでも判別しやすい表示
 
@@ -16,6 +16,22 @@
 GitHub Pagesのデプロイ完了後、以下で表示できます。
 
 https://horiken7.github.io/Daily-breifing-GMail/
+
+## Google連携の内容
+
+`Google連携` ボタンを押すと、Googleの同意画面が開きます。許可後、以下を読み取ります。
+
+- Google Calendar: 今日 0:00〜24:00 の予定
+- Gmail: 直近2日のうち、プロモーション・SNS・noreplyを除いたメール
+
+## 使う権限
+
+読み取り専用のみです。
+
+```text
+https://www.googleapis.com/auth/calendar.readonly
+https://www.googleapis.com/auth/gmail.readonly
+```
 
 ## Google連携の設定
 
@@ -34,6 +50,12 @@ https://horiken7.github.io/Daily-breifing-GMail/
 
 ```text
 https://horiken7.github.io
+```
+
+必要に応じて、テスト中のURLも追加します。
+
+```text
+http://localhost:5500
 ```
 
 ### config.jsを編集
@@ -58,3 +80,7 @@ Settings → Pages で以下に設定してください。
 - Source: Deploy from a branch
 - Branch: main
 - Folder: / root
+
+## 注意
+
+このサイトはブラウザ上でGoogleから短時間だけ使えるアクセストークンを受け取り、Calendar/Gmail APIを読み取ります。トークンはブラウザのセッション内だけに保存し、長期保存はしません。
