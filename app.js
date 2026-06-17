@@ -175,10 +175,10 @@ function normalizeEvent(event) {
 }
 
 async function loadImportantMails() {
-  const query = "newer_than:2d -category:promotions -category:social -from:noreply";
+  const query = "newer_than:2d -category:promotions -category:social";
   const params = new URLSearchParams({
     q: query,
-    maxResults: "12",
+    maxResults: "20",
     includeSpamTrash: "false"
   });
   const listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params}`;
@@ -186,13 +186,8 @@ async function loadImportantMails() {
   const messages = list.messages || [];
   if (!messages.length) return [];
 
-  const details = await Promise.all(messages.slice(0, 10).map(async (msg) => {
-    const params = new URLSearchParams({
-      format: "metadata",
-      metadataHeaders: "Subject"
-    });
-    params.append("metadataHeaders", "From");
-    params.append("metadataHeaders", "Date");
+  const details = await Promise.all(messages.slice(0, 12).map(async (msg) => {
+    const params = new URLSearchParams({ format: "full" });
     const detailUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?${params}`;
     const detail = await googleFetch(detailUrl);
     return normalizeMail(detail);
@@ -200,6 +195,7 @@ async function loadImportantMails() {
 
   return details
     .map(scoreMail)
+    .filter((mail) => mail.score >= 22 && mail.level !== "low")
     .sort((a, b) => b.score - a.score)
     .slice(0, 5);
 }
@@ -207,52 +203,136 @@ async function loadImportantMails() {
 function normalizeMail(message) {
   const headers = message.payload?.headers || [];
   const getHeader = (name) => headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || "";
+  const body = cleanMailText(extractMailBody(message.payload));
+  const summary = summarizeMailBody(body || message.snippet || "");
   return {
     id: message.id,
     subject: getHeader("Subject") || "件名なし",
     from: getHeader("From") || "差出人不明",
     date: getHeader("Date") || "",
     snippet: message.snippet || "",
+    body,
+    summary,
     labels: message.labelIds || []
   };
 }
 
+function extractMailBody(payload) {
+  if (!payload) return "";
+  const plainParts = [];
+  const htmlParts = [];
+
+  function walk(part) {
+    if (!part) return;
+    const mimeType = part.mimeType || "";
+    const data = part.body?.data;
+    if (data) {
+      if (mimeType.includes("text/plain")) plainParts.push(decodeBase64Url(data));
+      else if (mimeType.includes("text/html")) htmlParts.push(stripHtml(decodeBase64Url(data)));
+    }
+    (part.parts || []).forEach(walk);
+  }
+
+  walk(payload);
+  return plainParts.join("\n") || htmlParts.join("\n") || "";
+}
+
+function decodeBase64Url(value = "") {
+  try {
+    const base64 = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+    const binary = atob(base64);
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    return new TextDecoder("utf-8").decode(bytes);
+  } catch (error) {
+    console.warn("Gmail本文のデコードに失敗しました", error);
+    return "";
+  }
+}
+
+function stripHtml(value = "") {
+  const doc = new DOMParser().parseFromString(value, "text/html");
+  return doc.body?.textContent || "";
+}
+
+function cleanMailText(value = "") {
+  return String(value)
+    .replace(/\r/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function summarizeMailBody(text = "") {
+  const cleaned = cleanMailText(text);
+  if (!cleaned) return "本文を取得できませんでした。";
+  const sentences = cleaned
+    .split(/(?<=[。！？!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const importantWords = ["至急", "重要", "期限", "要返信", "確認", "承認", "支払い", "請求", "予約", "変更", "キャンセル", "遅延", "中止", "security", "alert", "invoice", "payment", "reservation", "booking", "cancel", "delay"];
+  const ranked = sentences
+    .map((sentence, index) => ({
+      sentence,
+      index,
+      score: importantWords.reduce((sum, word) => sum + (sentence.toLowerCase().includes(word.toLowerCase()) ? 3 : 0), 0) + (index < 2 ? 1 : 0)
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, 2)
+    .sort((a, b) => a.index - b.index)
+    .map((item) => item.sentence);
+  const summary = (ranked.length ? ranked : sentences.slice(0, 2)).join(" ");
+  return summary.length > 180 ? `${summary.slice(0, 180)}…` : summary;
+}
+
 function scoreMail(mail) {
-  const text = `${mail.subject} ${mail.from} ${mail.snippet}`.toLowerCase();
+  const text = `${mail.subject} ${mail.from} ${mail.snippet} ${mail.body}`.toLowerCase();
   let score = mail.labels.includes("UNREAD") ? 12 : 0;
   let type = "📩 確認";
   let level = "mid";
   let badge = "🟡 確認推奨";
 
-  const highWords = ["至急", "重要", "期限", "要返信", "確認依頼", "支払い", "請求", "security", "alert", "password", "login", "invoice", "payment"];
+  const highWords = ["至急", "重要", "期限", "要返信", "確認依頼", "承認依頼", "支払い", "請求", "未払い", "督促", "security", "alert", "password", "login", "invoice", "payment", "action required", "verify"];
   const travelWords = ["予約", "reservation", "booking", "hotel", "flight", "航空", "宿泊", "旅行", "チェックイン"];
-  const changeWords = ["変更", "キャンセル", "遅延", "中止", "cancel", "delay", "changed"];
+  const changeWords = ["変更", "キャンセル", "遅延", "中止", "欠航", "運休", "cancel", "delay", "changed", "canceled"];
+  const workWords = ["会議", "打ち合わせ", "面談", "見積", "納期", "仕様", "契約", "注文", "発注", "納品", "meeting", "deadline", "quote", "contract"];
+  const lowWords = ["newsletter", "ニュースレター", "campaign", "キャンペーン", "メルマガ", "sale", "セール", "広告"];
 
   if (highWords.some((w) => text.includes(w))) {
-    score += 40;
+    score += 45;
     level = "high";
     badge = "🔴 重要";
     type = "📩 要確認";
   }
   if (travelWords.some((w) => text.includes(w))) {
-    score += 22;
+    score += 24;
     type = "🧳 予約・旅行";
     if (level !== "high") badge = "🟡 予約確認";
   }
   if (changeWords.some((w) => text.includes(w))) {
-    score += 35;
+    score += 38;
     level = level === "high" ? "high" : "warn";
     badge = level === "high" ? "🔴 重要" : "⚠️ 注意";
     type = "🔁 変更通知";
   }
-  if (text.includes("証券") || text.includes("銀行") || text.includes("sbi") || text.includes("rakuten")) {
+  if (workWords.some((w) => text.includes(w))) {
+    score += 22;
+    type = "💼 仕事・手続き";
+  }
+  if (text.includes("証券") || text.includes("銀行") || text.includes("sbi") || text.includes("rakuten") || text.includes("楽天")) {
     score += 18;
     type = "📈 金融関連";
   }
-  if (text.includes("newsletter") || text.includes("ニュースレター") || text.includes("campaign")) {
-    score -= 18;
+  if (lowWords.some((w) => text.includes(w)) && score < 45) {
+    score -= 22;
     level = "low";
     badge = "🟢 通常";
+  }
+  if (score >= 55) {
+    level = "high";
+    badge = "🔴 重要";
+  } else if (score >= 35 && level !== "high") {
+    level = "warn";
+    badge = "⚠️ 注意";
   }
 
   return { ...mail, score, level, badge, type };
@@ -435,7 +515,7 @@ function renderMails() {
   $("gmailBadge").className = "badge " + (state.mails.some((m) => m.level === "high") ? "badge-red" : state.mails.length ? "badge-yellow" : "badge-green");
   $("gmailList").innerHTML = state.mails.length
     ? state.mails.map(renderMail).join("")
-    : `<div class="item level-low"><div class="item__title">🟢 重要メールは少なめ</div><div class="item__meta">直近2日で重要度が高そうなメールは見つかりませんでした。</div></div>`;
+    : `<div class="item level-low"><div class="item__title">🟢 重要メールは少なめ</div><div class="item__meta">直近2日の本文を確認し、重要度が高そうなメールは見つかりませんでした。</div></div>`;
 }
 
 function renderMail(mail) {
@@ -446,7 +526,7 @@ function renderMail(mail) {
         <span class="badge">${mail.badge}</span>
       </div>
       <div class="item__meta">From: ${escapeHtml(mail.from)}</div>
-      <div class="item__meta">${escapeHtml(mail.snippet)}</div>
+      <div class="item__meta">📝 ${escapeHtml(mail.summary)}</div>
     </div>
   `;
 }
@@ -463,7 +543,7 @@ function renderPriority() {
   if (w.wind >= 35) items.push({ level: "warn", badge: "⚠️ 注意", title: "💨 強めの風", meta: "自転車・傘・帽子に注意。" });
 
   const highMails = state.mails.filter((m) => m.level === "high");
-  if (highMails.length) items.unshift({ level: "high", badge: "🔴 重要", title: `📩 重要メール ${highMails.length}件`, meta: "返信・確認が必要そうなメールがあります。" });
+  if (highMails.length) items.unshift({ level: "high", badge: "🔴 重要", title: `📩 重要メール ${highMails.length}件`, meta: "本文から、返信・確認が必要そうなメールがあります。" });
 
   if (state.events.length) items.push({ level: "mid", badge: "🟡 予定", title: `📅 今日の予定 ${state.events.length}件`, meta: "移動時間と天気を合わせて確認してください。" });
 
@@ -478,7 +558,7 @@ function renderGoogleDisconnected() {
   $("calendarBadge").textContent = "未接続";
   $("gmailBadge").textContent = "未接続";
   $("calendarList").innerHTML = `<div class="item level-mid"><div class="item__title">📅 Google連携待ち</div><div class="item__meta">「🔐 Google連携」を押すと、今日の予定を読み取ります。</div></div>`;
-  $("gmailList").innerHTML = `<div class="item level-mid"><div class="item__title">📩 Google連携待ち</div><div class="item__meta">「🔐 Google連携」を押すと、重要そうなメールを抽出します。</div></div>`;
+  $("gmailList").innerHTML = `<div class="item level-mid"><div class="item__title">📩 Google連携待ち</div><div class="item__meta">「🔐 Google連携」を押すと、直近メールの本文を確認し、重要なものだけ要約します。</div></div>`;
 }
 
 function renderGoogleSetupGuide() {
@@ -491,7 +571,7 @@ function renderDailyAdvice() {
   if (!w) return;
   const advice = [];
   advice.push("🚀 まずやる：朝のうちに今日の予定と重要メールを確認");
-  if (state.mails.some((m) => m.level === "high")) advice.push("🔴 メール：重要メールを先に処理。返信・支払い・予約変更を優先");
+  if (state.mails.some((m) => m.level === "high")) advice.push("🔴 メール：本文から重要と判定されたメールを先に処理。返信・支払い・予約変更を優先");
   if (state.events.length) advice.push("📅 予定：予定前後の移動時間を確保。天気に合わせて早めに出発");
   if (w.rain >= 35) advice.push("☔ 外出前：傘を準備。移動時間も少し余裕を持つ");
   if (w.tempMax >= 30) advice.push("🥤 体調管理：暑さ対策と水分補給を優先");
