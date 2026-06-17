@@ -1,34 +1,12 @@
-name: Deploy static site to GitHub Pages
+window.DAILY_BRIEFING_CONFIG = {
+  // Google Cloud Consoleで作成したOAuth 2.0 クライアントIDを入れてください。
+  // 例: "1234567890-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com"
+  GOOGLE_CLIENT_ID: "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
 
-on:
-  push:
-    branches: ["main"]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
-
-jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: "."
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+  // 位置情報を許可しない場合の初期表示。北九州市八幡西区の目安です。
+  DEFAULT_LOCATION: {
+    label: "北九州市八幡西区 目安",
+    latitude: 33.861,
+    longitude: 130.745
+  }
+};
