@@ -5,11 +5,19 @@ const DEFAULT_LOCATION = CONFIG.DEFAULT_LOCATION || {
   longitude: 130.745
 };
 
+const SCOPES = [
+  "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/gmail.readonly"
+].join(" ");
+
 const state = {
   weather: null,
   place: DEFAULT_LOCATION.label,
   events: [],
-  mails: []
+  mails: [],
+  token: sessionStorage.getItem("dailyBriefingGoogleToken") || "",
+  tokenClient: null,
+  googleReady: false
 };
 
 const $ = (id) => document.getElementById(id);
@@ -19,25 +27,23 @@ window.addEventListener("DOMContentLoaded", () => {
   bindButtons();
   updateStatus("🌤️ 天気を取得しています...");
   loadWeather(DEFAULT_LOCATION.latitude, DEFAULT_LOCATION.longitude, DEFAULT_LOCATION.label);
-  renderGooglePlaceholders();
+  renderGoogleDisconnected();
+  initGoogleWhenReady();
 });
 
 function bindButtons() {
-  $("refreshBtn")?.addEventListener("click", () => {
-    renderToday();
-    loadWeather(DEFAULT_LOCATION.latitude, DEFAULT_LOCATION.longitude, DEFAULT_LOCATION.label);
-  });
-
+  $("refreshBtn")?.addEventListener("click", refreshAll);
   $("locationBtn")?.addEventListener("click", requestLocationWeather);
-  $("googleBtn")?.addEventListener("click", () => {
-    const clientId = CONFIG.GOOGLE_CLIENT_ID || "";
-    if (!clientId || clientId.includes("YOUR_GOOGLE_CLIENT_ID")) {
-      updateStatus("🔐 Google連携は config.js の GOOGLE_CLIENT_ID 設定後に有効になります。");
-      renderGooglePlaceholders("⚠️ Google Client ID 未設定です");
-      return;
-    }
-    updateStatus("🔐 Google連携の本実装は次ステップです。まずは天気・服装・今日の提案を表示しています。");
-  });
+  $("googleBtn")?.addEventListener("click", connectGoogle);
+}
+
+async function refreshAll() {
+  renderToday();
+  updateStatus("🔄 最新情報に更新中...");
+  await loadWeather(DEFAULT_LOCATION.latitude, DEFAULT_LOCATION.longitude, DEFAULT_LOCATION.label);
+  if (state.token) await loadGoogleData();
+  renderAll();
+  updateStatus("✅ 最新情報に更新しました");
 }
 
 function renderToday() {
@@ -50,6 +56,214 @@ function renderToday() {
 
 function updateStatus(message) {
   $("statusLine").textContent = message;
+}
+
+function isGoogleClientConfigured() {
+  const clientId = CONFIG.GOOGLE_CLIENT_ID || "";
+  return Boolean(clientId && !clientId.includes("YOUR_GOOGLE_CLIENT_ID"));
+}
+
+function initGoogleWhenReady(retry = 0) {
+  if (!isGoogleClientConfigured()) {
+    $("googleBtn").textContent = "🔐 Google連携（ID設定待ち）";
+    updateStatus("⚠️ Google連携には config.js の GOOGLE_CLIENT_ID 設定が必要です。天気機能は利用できます。");
+    return;
+  }
+
+  if (!window.google?.accounts?.oauth2) {
+    if (retry < 50) setTimeout(() => initGoogleWhenReady(retry + 1), 120);
+    else updateStatus("⚠️ Google認証ライブラリの読み込みに失敗しました。ページを再読み込みしてください。");
+    return;
+  }
+
+  state.googleReady = true;
+  state.tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: CONFIG.GOOGLE_CLIENT_ID,
+    scope: SCOPES,
+    callback: async (response) => {
+      if (response?.error) {
+        updateStatus(`⚠️ Google連携エラー: ${response.error}`);
+        return;
+      }
+      if (!response?.access_token) {
+        updateStatus("⚠️ Google連携が完了しませんでした。もう一度お試しください。");
+        return;
+      }
+      state.token = response.access_token;
+      sessionStorage.setItem("dailyBriefingGoogleToken", state.token);
+      $("googleBtn").textContent = "✅ Google連携済み";
+      updateStatus("📅📩 Googleから今日の予定と重要メールを取得中...");
+      await loadGoogleData();
+      renderAll();
+      updateStatus("✅ Google連携データを表示しました");
+    }
+  });
+
+  $("googleBtn").textContent = state.token ? "✅ Google連携済み" : "🔐 Google連携";
+  if (state.token) loadGoogleData().then(renderAll).catch(handleGoogleError);
+}
+
+function connectGoogle() {
+  if (!isGoogleClientConfigured()) {
+    updateStatus("⚠️ 先に config.js に Google OAuth クライアントIDを設定してください。");
+    renderGoogleSetupGuide();
+    return;
+  }
+  if (!state.googleReady || !state.tokenClient) {
+    updateStatus("⏳ Google認証を準備中です。数秒後にもう一度押してください。");
+    return;
+  }
+  state.tokenClient.requestAccessToken({ prompt: state.token ? "" : "consent" });
+}
+
+async function loadGoogleData() {
+  if (!state.token) return;
+  const [events, mails] = await Promise.all([
+    loadTodayCalendarEvents(),
+    loadImportantMails()
+  ]);
+  state.events = events;
+  state.mails = mails;
+  renderCalendar();
+  renderMails();
+}
+
+async function googleFetch(url) {
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${state.token}` }
+  });
+  if (res.status === 401) {
+    sessionStorage.removeItem("dailyBriefingGoogleToken");
+    state.token = "";
+    throw new Error("TOKEN_EXPIRED");
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Google API error ${res.status}`);
+  }
+  return res.json();
+}
+
+async function loadTodayCalendarEvents() {
+  const { start, end } = getTodayRange();
+  const params = new URLSearchParams({
+    timeMin: start,
+    timeMax: end,
+    singleEvents: "true",
+    orderBy: "startTime",
+    maxResults: "20",
+    timeZone: "Asia/Tokyo"
+  });
+  const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`;
+  const data = await googleFetch(url);
+  return (data.items || []).map(normalizeEvent);
+}
+
+function normalizeEvent(event) {
+  const startRaw = event.start?.dateTime || event.start?.date;
+  const endRaw = event.end?.dateTime || event.end?.date;
+  const allDay = Boolean(event.start?.date);
+  return {
+    title: event.summary || "予定あり",
+    location: event.location || "",
+    description: event.description || "",
+    start: startRaw,
+    end: endRaw,
+    allDay,
+    icon: eventIcon(event.summary || "")
+  };
+}
+
+async function loadImportantMails() {
+  const query = "newer_than:2d -category:promotions -category:social -from:noreply";
+  const params = new URLSearchParams({
+    q: query,
+    maxResults: "12",
+    includeSpamTrash: "false"
+  });
+  const listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params}`;
+  const list = await googleFetch(listUrl);
+  const messages = list.messages || [];
+  if (!messages.length) return [];
+
+  const details = await Promise.all(messages.slice(0, 10).map(async (msg) => {
+    const params = new URLSearchParams({
+      format: "metadata",
+      metadataHeaders: "Subject"
+    });
+    params.append("metadataHeaders", "From");
+    params.append("metadataHeaders", "Date");
+    const detailUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?${params}`;
+    const detail = await googleFetch(detailUrl);
+    return normalizeMail(detail);
+  }));
+
+  return details
+    .map(scoreMail)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
+}
+
+function normalizeMail(message) {
+  const headers = message.payload?.headers || [];
+  const getHeader = (name) => headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || "";
+  return {
+    id: message.id,
+    subject: getHeader("Subject") || "件名なし",
+    from: getHeader("From") || "差出人不明",
+    date: getHeader("Date") || "",
+    snippet: message.snippet || "",
+    labels: message.labelIds || []
+  };
+}
+
+function scoreMail(mail) {
+  const text = `${mail.subject} ${mail.from} ${mail.snippet}`.toLowerCase();
+  let score = mail.labels.includes("UNREAD") ? 12 : 0;
+  let type = "📩 確認";
+  let level = "mid";
+  let badge = "🟡 確認推奨";
+
+  const highWords = ["至急", "重要", "期限", "要返信", "確認依頼", "支払い", "請求", "security", "alert", "password", "login", "invoice", "payment"];
+  const travelWords = ["予約", "reservation", "booking", "hotel", "flight", "航空", "宿泊", "旅行", "チェックイン"];
+  const changeWords = ["変更", "キャンセル", "遅延", "中止", "cancel", "delay", "changed"];
+
+  if (highWords.some((w) => text.includes(w))) {
+    score += 40;
+    level = "high";
+    badge = "🔴 重要";
+    type = "📩 要確認";
+  }
+  if (travelWords.some((w) => text.includes(w))) {
+    score += 22;
+    type = "🧳 予約・旅行";
+    if (level !== "high") badge = "🟡 予約確認";
+  }
+  if (changeWords.some((w) => text.includes(w))) {
+    score += 35;
+    level = level === "high" ? "high" : "warn";
+    badge = level === "high" ? "🔴 重要" : "⚠️ 注意";
+    type = "🔁 変更通知";
+  }
+  if (text.includes("証券") || text.includes("銀行") || text.includes("sbi") || text.includes("rakuten")) {
+    score += 18;
+    type = "📈 金融関連";
+  }
+  if (text.includes("newsletter") || text.includes("ニュースレター") || text.includes("campaign")) {
+    score -= 18;
+    level = "low";
+    badge = "🟢 通常";
+  }
+
+  return { ...mail, score, level, badge, type };
+}
+
+function getTodayRange() {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return { start: start.toISOString(), end: end.toISOString() };
 }
 
 function requestLocationWeather() {
@@ -135,6 +349,8 @@ function weatherCodeToText(code) {
 function renderAll() {
   renderWeather();
   renderClothes();
+  renderCalendar();
+  renderMails();
   renderPriority();
   renderDailyAdvice();
 }
@@ -184,6 +400,57 @@ function renderClothes() {
   $("clothesAdvice").innerHTML = tips.map((t) => `<span class="chip">${t}</span>`).join("");
 }
 
+function renderCalendar() {
+  if (!state.token) {
+    $("calendarBadge").textContent = "未接続";
+    return;
+  }
+  $("calendarBadge").textContent = state.events.length ? `${state.events.length}件` : "予定なし";
+  $("calendarBadge").className = "badge " + (state.events.length ? "badge-yellow" : "badge-green");
+  $("calendarList").innerHTML = state.events.length
+    ? state.events.map(renderEvent).join("")
+    : `<div class="item level-low"><div class="item__title">🟢 今日の予定は少なめ</div><div class="item__meta">予定が入っていないか、取得対象がありません。</div></div>`;
+}
+
+function renderEvent(event) {
+  const time = event.allDay ? "終日" : `${formatTime(event.start)}-${formatTime(event.end)}`;
+  const location = event.location ? `<div class="item__meta">📍 ${escapeHtml(event.location)}</div>` : "";
+  return `
+    <div class="item level-mid">
+      <div class="item__top">
+        <div class="item__title">${event.icon} ${time} ${escapeHtml(event.title)}</div>
+        <span class="badge badge-yellow">🟡 予定</span>
+      </div>
+      ${location}
+    </div>
+  `;
+}
+
+function renderMails() {
+  if (!state.token) {
+    $("gmailBadge").textContent = "未接続";
+    return;
+  }
+  $("gmailBadge").textContent = state.mails.length ? `${state.mails.length}件` : "重要なし";
+  $("gmailBadge").className = "badge " + (state.mails.some((m) => m.level === "high") ? "badge-red" : state.mails.length ? "badge-yellow" : "badge-green");
+  $("gmailList").innerHTML = state.mails.length
+    ? state.mails.map(renderMail).join("")
+    : `<div class="item level-low"><div class="item__title">🟢 重要メールは少なめ</div><div class="item__meta">直近2日で重要度が高そうなメールは見つかりませんでした。</div></div>`;
+}
+
+function renderMail(mail) {
+  return `
+    <div class="item level-${mail.level}">
+      <div class="item__top">
+        <div class="item__title">${mail.type} ${escapeHtml(mail.subject)}</div>
+        <span class="badge">${mail.badge}</span>
+      </div>
+      <div class="item__meta">From: ${escapeHtml(mail.from)}</div>
+      <div class="item__meta">${escapeHtml(mail.snippet)}</div>
+    </div>
+  `;
+}
+
 function renderPriority() {
   const w = state.weather;
   const items = [];
@@ -195,18 +462,28 @@ function renderPriority() {
   if (w.tempMax >= 30) items.push({ level: "warn", badge: "⚠️ 注意", title: "🥵 暑さ対策", meta: "水分補給と涼しい服装を優先。" });
   if (w.wind >= 35) items.push({ level: "warn", badge: "⚠️ 注意", title: "💨 強めの風", meta: "自転車・傘・帽子に注意。" });
 
-  if (!items.length) items.push({ level: "low", badge: "🟢 通常", title: "✅ 大きな注意事項は少なめ", meta: "天気面では比較的動きやすい一日です。" });
+  const highMails = state.mails.filter((m) => m.level === "high");
+  if (highMails.length) items.unshift({ level: "high", badge: "🔴 重要", title: `📩 重要メール ${highMails.length}件`, meta: "返信・確認が必要そうなメールがあります。" });
+
+  if (state.events.length) items.push({ level: "mid", badge: "🟡 予定", title: `📅 今日の予定 ${state.events.length}件`, meta: "移動時間と天気を合わせて確認してください。" });
+
+  if (!items.length) items.push({ level: "low", badge: "🟢 通常", title: "✅ 大きな注意事項は少なめ", meta: "天気・予定・メールの面では比較的動きやすい一日です。" });
 
   $("priorityBadge").textContent = items.some((i) => i.level === "high") ? "🔴 要対応" : items.some((i) => i.level === "warn" || i.level === "mid") ? "🟡 確認" : "🟢 通常";
   $("priorityBadge").className = "badge " + (items.some((i) => i.level === "high") ? "badge-red" : items.some((i) => i.level === "warn" || i.level === "mid") ? "badge-yellow" : "badge-green");
   $("priorityList").innerHTML = items.map(renderItem).join("");
 }
 
-function renderGooglePlaceholders(message = "Google連携は準備中です") {
+function renderGoogleDisconnected() {
   $("calendarBadge").textContent = "未接続";
   $("gmailBadge").textContent = "未接続";
-  $("calendarList").innerHTML = `<div class="item level-mid"><div class="item__title">📅 ${message}</div><div class="item__meta">config.js に Google Client ID を設定後、今日の予定表示へ進みます。</div></div>`;
-  $("gmailList").innerHTML = `<div class="item level-mid"><div class="item__title">📩 ${message}</div><div class="item__meta">読み取り専用で重要メールを表示する設計です。</div></div>`;
+  $("calendarList").innerHTML = `<div class="item level-mid"><div class="item__title">📅 Google連携待ち</div><div class="item__meta">「🔐 Google連携」を押すと、今日の予定を読み取ります。</div></div>`;
+  $("gmailList").innerHTML = `<div class="item level-mid"><div class="item__title">📩 Google連携待ち</div><div class="item__meta">「🔐 Google連携」を押すと、重要そうなメールを抽出します。</div></div>`;
+}
+
+function renderGoogleSetupGuide() {
+  $("calendarList").innerHTML = `<div class="item level-warn"><div class="item__title">⚠️ Google Client ID 未設定</div><div class="item__meta">Google Cloud ConsoleでOAuth 2.0クライアントIDを作成し、config.jsへ設定してください。</div></div>`;
+  $("gmailList").innerHTML = `<div class="item level-warn"><div class="item__title">⚠️ Google Client ID 未設定</div><div class="item__meta">承認済みJavaScript生成元には https://horiken7.github.io を入れてください。</div></div>`;
 }
 
 function renderDailyAdvice() {
@@ -214,6 +491,8 @@ function renderDailyAdvice() {
   if (!w) return;
   const advice = [];
   advice.push("🚀 まずやる：朝のうちに今日の予定と重要メールを確認");
+  if (state.mails.some((m) => m.level === "high")) advice.push("🔴 メール：重要メールを先に処理。返信・支払い・予約変更を優先");
+  if (state.events.length) advice.push("📅 予定：予定前後の移動時間を確保。天気に合わせて早めに出発");
   if (w.rain >= 35) advice.push("☔ 外出前：傘を準備。移動時間も少し余裕を持つ");
   if (w.tempMax >= 30) advice.push("🥤 体調管理：暑さ対策と水分補給を優先");
   if (w.wind >= 35) advice.push("🚗 移動：風が強いので徒歩・自転車・傘利用に注意");
@@ -232,6 +511,42 @@ function renderItem(item) {
       <div class="item__meta">${item.meta}</div>
     </div>
   `;
+}
+
+function eventIcon(text) {
+  const t = text.toLowerCase();
+  if (t.includes("会議") || t.includes("meeting") || t.includes("レビュー")) return "💼";
+  if (t.includes("打ち合わせ") || t.includes("商談")) return "🤝";
+  if (t.includes("病院") || t.includes("歯") || t.includes("クリニック")) return "🏥";
+  if (t.includes("美容") || t.includes("カット") || t.includes("サロン")) return "✂️";
+  if (t.includes("旅行") || t.includes("ホテル") || t.includes("空港")) return "🧳";
+  if (t.includes("食事") || t.includes("ランチ") || t.includes("飲み")) return "🍽️";
+  return "📌";
+}
+
+function formatTime(value) {
+  if (!value) return "";
+  return new Intl.DateTimeFormat("ja-JP", { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
+
+function escapeHtml(value = "") {
+  return String(value).replace(/[&<>'"]/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "'": "&#39;",
+    '"': "&quot;"
+  }[char]));
+}
+
+function handleGoogleError(error) {
+  console.error(error);
+  if (String(error.message).includes("TOKEN_EXPIRED")) {
+    updateStatus("🔐 Google連携の有効期限が切れました。もう一度 Google連携 を押してください。");
+    renderGoogleDisconnected();
+    return;
+  }
+  updateStatus("⚠️ Googleデータの取得に失敗しました。権限設定とClient IDを確認してください。");
 }
 
 function renderFallback() {
