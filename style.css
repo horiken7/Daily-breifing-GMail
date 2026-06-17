@@ -40,9 +40,7 @@ body {
   padding: 22px 18px;
   border-radius: 28px;
   box-shadow: var(--shadow);
-  position: sticky;
-  top: 10px;
-  z-index: 10;
+  position: static;
 }
 
 .hero__label {
