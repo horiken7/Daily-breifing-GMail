@@ -1,6 +1,6 @@
 // Priority/advice wording patch: use only concrete facts from calendar data.
 (function(){
-  const PRIORITY_FIX_VERSION = "priority-calendar-facts-v2-no-mail-card";
+  const PRIORITY_FIX_VERSION = "priority-calendar-facts-v3-no-daily-mail";
   sessionStorage.setItem("dailyBriefingPriorityFixVersion", PRIORITY_FIX_VERSION);
 
   function toMinutes(value) {
@@ -97,8 +97,8 @@
     if (state.events.length) advice.push(`📅 予定：${buildCalendarFacts(state.events)}`);
     else advice.push("📅 予定：今日の予定はありません。");
 
-    const highMails = state.mails.filter((m) => m.level === "high");
-    if (highMails.length) advice.push(`📩 重要メール：${highMails.slice(0, 3).map((mail) => escapeHtml(mail.subject || "件名なし")).join(" / ")}`);
+    // 重要メールは下部の「📩 重要メール」欄だけに表示する。
+    // 「今日の過ごし方」には出さない。
 
     advice.push(`☀️ 天気：${escapeHtml(w.label)}、現在${w.tempNow}℃、最高${w.tempMax}℃、最低${w.tempMin}℃、降水確率${w.rain}%です。`);
     if (w.laundry) advice.push(`👕 洗濯：${w.laundry.score}点・${escapeHtml(w.laundry.label)}。`);
