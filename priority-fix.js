@@ -1,0 +1,122 @@
+// Priority/advice wording patch: use only concrete facts from calendar data.
+(function(){
+  const PRIORITY_FIX_VERSION = "priority-calendar-facts-v1";
+  sessionStorage.setItem("dailyBriefingPriorityFixVersion", PRIORITY_FIX_VERSION);
+
+  function toMinutes(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return date.getHours() * 60 + date.getMinutes();
+  }
+
+  function calendarName(event) {
+    return String(event?.calendarName || "").trim();
+  }
+
+  function isCalendar(event, name) {
+    return calendarName(event).toLowerCase() === String(name).toLowerCase();
+  }
+
+  function eventTitle(event) {
+    return String(event?.title || "予定あり").trim();
+  }
+
+  function uniqueTitles(events) {
+    return [...new Set(events.map(eventTitle).filter(Boolean))];
+  }
+
+  function buildCalendarFacts(events = []) {
+    const valid = events.filter((event) => event && (event.status || "confirmed") !== "cancelled");
+    const timed = valid.filter((event) => !event.allDay);
+    const allDay = valid.filter((event) => event.allDay);
+
+    const morning = timed.filter((event) => {
+      const minutes = toMinutes(event.start || event.dateSort);
+      return minutes !== null && minutes < 12 * 60;
+    });
+    const afternoon = timed.filter((event) => {
+      const minutes = toMinutes(event.start || event.dateSort);
+      return minutes !== null && minutes >= 12 * 60 && minutes < 18 * 60;
+    });
+    const evening = timed.filter((event) => {
+      const minutes = toMinutes(event.start || event.dateSort);
+      return minutes !== null && minutes >= 18 * 60;
+    });
+
+    const parts = [];
+    if (morning.length) parts.push(`午前中に${morning.length}件`);
+    if (afternoon.length) parts.push(`午後に${afternoon.length}件`);
+    if (evening.length) parts.push(`夕方以降に${evening.length}件`);
+    if (allDay.length) parts.push(`終日予定が${allDay.length}件`);
+
+    const lines = [];
+    if (parts.length) lines.push(`${parts.join("、")}の予定があります。`);
+
+    const home = uniqueTitles(valid.filter((event) => isCalendar(event, "Home")));
+    const special = uniqueTitles(valid.filter((event) => isCalendar(event, "Special day")));
+    const holidays = uniqueTitles(valid.filter((event) => isCalendar(event, "日本の祝日")));
+
+    if (home.length) lines.push(`🏠 Home：${home.join(" / ")}`);
+    if (special.length) lines.push(`🎂 Special day：${special.join(" / ")}`);
+    if (holidays.length) lines.push(`🇯🇵 日本の祝日：${holidays.join(" / ")}`);
+
+    return lines.length ? lines.join("<br>") : "今日の予定はありません。";
+  }
+
+  renderPriority = function() {
+    const w = state.weather;
+    const items = [];
+    if (!w) return;
+
+    if (w.rain >= 60) items.push({ level: "high", badge: "🔴 重要", title: "☔ 傘必須", meta: "雨の可能性が高いです。" });
+    else if (w.rain >= 35) items.push({ level: "mid", badge: "🟡 確認", title: "🌂 折りたたみ傘推奨", meta: "降る可能性があります。" });
+
+    if (w.tempMax >= 30) items.push({ level: "warn", badge: "⚠️ 注意", title: "🥵 暑さ対策", meta: `最高気温は${w.tempMax}℃です。` });
+    if (w.wind >= 35) items.push({ level: "warn", badge: "⚠️ 注意", title: "💨 強めの風", meta: `最大風速は${w.wind}km/hです。` });
+
+    const highMails = state.mails.filter((m) => m.level === "high");
+    if (highMails.length) items.unshift({ level: "high", badge: "🔴 重要", title: `📩 重要メール ${highMails.length}件`, meta: highMails.slice(0, 3).map((mail) => escapeHtml(mail.subject || "件名なし")).join("<br>") });
+
+    if (state.events.length) {
+      items.push({ level: "mid", badge: "🟡 予定", title: `📅 今日の予定 ${state.events.length}件`, meta: buildCalendarFacts(state.events) });
+    }
+
+    if (!items.length) items.push({ level: "low", badge: "🟢 通常", title: "✅ 大きな注意事項は少なめ", meta: "予定・重要メール・天気の注意は少なめです。" });
+
+    $("priorityBadge").textContent = items.some((i) => i.level === "high") ? "🔴 要対応" : items.some((i) => i.level === "warn" || i.level === "mid") ? "🟡 確認" : "🟢 通常";
+    $("priorityBadge").className = "badge " + (items.some((i) => i.level === "high") ? "badge-red" : items.some((i) => i.level === "warn" || i.level === "mid") ? "badge-yellow" : "badge-green");
+    $("priorityList").innerHTML = items.map(renderItem).join("");
+  };
+
+  renderDailyAdvice = function() {
+    const w = state.weather;
+    if (!w) return;
+    const advice = [];
+
+    if (state.events.length) advice.push(`📅 予定：${buildCalendarFacts(state.events)}`);
+    else advice.push("📅 予定：今日の予定はありません。");
+
+    const highMails = state.mails.filter((m) => m.level === "high");
+    if (highMails.length) advice.push(`📩 重要メール：${highMails.slice(0, 3).map((mail) => escapeHtml(mail.subject || "件名なし")).join(" / ")}`);
+
+    advice.push(`☀️ 天気：${escapeHtml(w.label)}、現在${w.tempNow}℃、最高${w.tempMax}℃、最低${w.tempMin}℃、降水確率${w.rain}%です。`);
+    if (w.laundry) advice.push(`👕 洗濯：${w.laundry.score}点・${escapeHtml(w.laundry.label)}。`);
+    if (w.rain >= 35) advice.push("☔ 雨：傘を準備してください。");
+    if (w.tempMax >= 30) advice.push("🥤 暑さ：水分補給を意識してください。");
+    if (w.wind >= 35) advice.push(`💨 風：最大風速${w.wind}km/hです。`);
+
+    $("dailyAdvice").innerHTML = advice.map((a) => `<p>${a}</p>`).join("");
+  };
+
+  setTimeout(() => {
+    try {
+      if (state) {
+        renderPriority();
+        renderDailyAdvice();
+      }
+    } catch (error) {
+      console.warn("priority-fix render skipped", error);
+    }
+  }, 1200);
+})();
