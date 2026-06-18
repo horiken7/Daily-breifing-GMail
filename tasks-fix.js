@@ -1,10 +1,11 @@
 // Google Tasks patch: show incomplete overdue tasks and incomplete tasks due within 7 days.
 (function(){
-  const TASKS_FIX_VERSION = "tasks-overdue-next7-v3-refresh-priority";
+  const TASKS_FIX_VERSION = "tasks-overdue-next7-v4-card-link";
   const TOKEN_VERSION_TASKS = "google-tasks-readonly-v1";
   sessionStorage.setItem("dailyBriefingTasksFixVersion", TASKS_FIX_VERSION);
 
   const TASKS_SCOPE = "https://www.googleapis.com/auth/tasks.readonly";
+  const TASKS_URL = "https://calendar.google.com/calendar/u/0/r/tasks?tab=rc";
 
   function shortTasksError(error) {
     const raw = String(error?.message || error || "");
@@ -132,8 +133,8 @@
     return "none";
   }
 
-  function taskListUrl(taskListId, taskId) {
-    return "https://calendar.google.com/calendar/u/0/r/tasks?tab=rc";
+  function taskListUrl() {
+    return TASKS_URL;
   }
 
   async function loadTaskLists() {
@@ -169,7 +170,7 @@
         status: task.status || "needsAction",
         listId: list.id,
         listTitle: list.title || "タスク",
-        url: task.webViewLink || taskListUrl(list.id, task.id)
+        url: TASKS_URL
       })));
       pageToken = data.nextPageToken || "";
     } while (pageToken);
@@ -210,17 +211,18 @@
     const due = task.due ? escapeHtml(task.due.replaceAll("-", "/")) : "期限なし";
     const list = task.listTitle ? `<div class="item__meta">📁 ${escapeHtml(task.listTitle)}</div>` : "";
     const note = task.notes ? `<div class="item__meta">📝 ${escapeHtml(task.notes).slice(0, 160)}</div>` : "";
-    const url = task.url || "https://calendar.google.com/calendar/u/0/r/tasks?tab=rc";
+    const url = TASKS_URL;
     return `
-      <div class="item level-${level}">
+      <a class="item level-${level} task-card-link" href="${url}" target="_blank" rel="noopener noreferrer" style="display:block;color:inherit;text-decoration:none;">
         <div class="mail-title-row">
-          <div class="item__title"><a href="${url}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none;">${title}</a></div>
+          <div class="item__title">${title}</div>
           <span class="badge ${task.kind === "overdue" ? "badge-red" : "badge-yellow"}">${mark}</span>
         </div>
         <div class="item__meta">📅 期限: ${due}</div>
         ${list}
         ${note}
-      </div>`;
+        <div class="item__meta" style="margin-top:6px;font-weight:800;color:#1769e0;">🔗 Google Tasksで開く</div>
+      </a>`;
   }
 
   renderTasks = function() {
