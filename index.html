@@ -54,6 +54,14 @@
         <div id="calendarList" class="item-list"><p class="muted">🔐 Google連携後、今日の予定を表示します。</p></div>
       </section>
 
+      <section class="card" aria-labelledby="tasksTitle">
+        <div class="card-title-row">
+          <h2 id="tasksTitle">✅ タスク</h2>
+          <span id="tasksBadge" class="badge">未接続</span>
+        </div>
+        <div id="tasksList" class="item-list"><p class="muted">🔐 Google連携後、期限切れと7日先までの未完了タスクを表示します。</p></div>
+      </section>
+
       <section class="card" aria-labelledby="gmailTitle">
         <div class="card-title-row">
           <h2 id="gmailTitle">📩 重要メール</h2>
@@ -78,5 +86,6 @@
   <script src="./gmail-fix.js"></script>
   <script src="./priority-fix.js"></script>
   <script src="./weather-alert-fix.js"></script>
+  <script src="./tasks-fix.js"></script>
 </body>
 </html>
