@@ -1,6 +1,6 @@
-// Priority/advice wording patch: use only concrete facts from calendar data.
+// Priority/advice wording patch: use only concrete facts from calendar and task data.
 (function(){
-  const PRIORITY_FIX_VERSION = "priority-calendar-facts-v3-no-daily-mail";
+  const PRIORITY_FIX_VERSION = "priority-calendar-tasks-v4";
   sessionStorage.setItem("dailyBriefingPriorityFixVersion", PRIORITY_FIX_VERSION);
 
   function toMinutes(value) {
@@ -8,6 +8,17 @@
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return null;
     return date.getHours() * 60 + date.getMinutes();
+  }
+
+  function todayYmd() {
+    const parts = new Intl.DateTimeFormat("ja-JP", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(new Date());
+    const get = (type) => parts.find((p) => p.type === type)?.value || "";
+    return `${get("year")}-${get("month")}-${get("day")}`;
   }
 
   function calendarName(event) {
@@ -64,6 +75,28 @@
     return lines.length ? lines.join("<br>") : "今日の予定はありません。";
   }
 
+  function buildImportantTaskFacts(tasks = []) {
+    const today = todayYmd();
+    const valid = tasks.filter((task) => task && task.status !== "completed" && task.due);
+    const overdue = valid.filter((task) => task.due < today);
+    const todayTasks = valid.filter((task) => task.due === today);
+    const lines = [];
+
+    if (overdue.length) {
+      lines.push(`🔴 期限切れ：${overdue.slice(0, 5).map((task) => escapeHtml(task.title || "無題のタスク")).join(" / ")}`);
+    }
+    if (todayTasks.length) {
+      lines.push(`🟡 本日期限：${todayTasks.slice(0, 5).map((task) => escapeHtml(task.title || "無題のタスク")).join(" / ")}`);
+    }
+
+    return {
+      count: overdue.length + todayTasks.length,
+      overdueCount: overdue.length,
+      todayCount: todayTasks.length,
+      text: lines.join("<br>")
+    };
+  }
+
   renderPriority = function() {
     const w = state.weather;
     const items = [];
@@ -75,6 +108,16 @@
     if (w.tempMax >= 30) items.push({ level: "warn", badge: "⚠️ 注意", title: "🥵 暑さ対策", meta: `最高気温は${w.tempMax}℃です。` });
     if (w.wind >= 35) items.push({ level: "warn", badge: "⚠️ 注意", title: "💨 強めの風", meta: `最大風速は${w.wind}km/hです。` });
 
+    const taskFacts = buildImportantTaskFacts(state.tasks || []);
+    if (taskFacts.count) {
+      items.push({
+        level: taskFacts.overdueCount ? "high" : "mid",
+        badge: taskFacts.overdueCount ? "🔴 タスク" : "🟡 タスク",
+        title: `✅ タスク ${taskFacts.count}件`,
+        meta: taskFacts.text
+      });
+    }
+
     // 重要メールは下部の「📩 重要メール」欄だけに表示する。
     // 上部の「今日の重要事項」にはメール件数カードを出さない。
 
@@ -82,7 +125,7 @@
       items.push({ level: "mid", badge: "🟡 予定", title: `📅 今日の予定 ${state.events.length}件`, meta: buildCalendarFacts(state.events) });
     }
 
-    if (!items.length) items.push({ level: "low", badge: "🟢 通常", title: "✅ 大きな注意事項は少なめ", meta: "予定・天気の注意は少なめです。" });
+    if (!items.length) items.push({ level: "low", badge: "🟢 通常", title: "✅ 大きな注意事項は少なめ", meta: "予定・タスク・天気の注意は少なめです。" });
 
     $("priorityBadge").textContent = items.some((i) => i.level === "high") ? "🔴 要対応" : items.some((i) => i.level === "warn" || i.level === "mid") ? "🟡 確認" : "🟢 通常";
     $("priorityBadge").className = "badge " + (items.some((i) => i.level === "high") ? "badge-red" : items.some((i) => i.level === "warn" || i.level === "mid") ? "badge-yellow" : "badge-green");
@@ -96,6 +139,9 @@
 
     if (state.events.length) advice.push(`📅 予定：${buildCalendarFacts(state.events)}`);
     else advice.push("📅 予定：今日の予定はありません。");
+
+    const taskFacts = buildImportantTaskFacts(state.tasks || []);
+    if (taskFacts.count) advice.push(`✅ タスク：${taskFacts.text}`);
 
     // 重要メールは下部の「📩 重要メール」欄だけに表示する。
     // 「今日の過ごし方」には出さない。
