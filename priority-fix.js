@@ -1,6 +1,6 @@
 // Priority/advice wording patch: use only concrete facts from calendar and task data.
 (function(){
-  const PRIORITY_FIX_VERSION = "priority-calendar-tasks-v4";
+  const PRIORITY_FIX_VERSION = "priority-calendar-tasks-v5-align-task-lines";
   sessionStorage.setItem("dailyBriefingPriorityFixVersion", PRIORITY_FIX_VERSION);
 
   function toMinutes(value) {
@@ -97,6 +97,11 @@
     };
   }
 
+  function buildImportantTaskDailyAdvice(taskFacts) {
+    if (!taskFacts?.count) return "";
+    return `✅ タスク：<br>${taskFacts.text}`;
+  }
+
   renderPriority = function() {
     const w = state.weather;
     const items = [];
@@ -141,7 +146,8 @@
     else advice.push("📅 予定：今日の予定はありません。");
 
     const taskFacts = buildImportantTaskFacts(state.tasks || []);
-    if (taskFacts.count) advice.push(`✅ タスク：${taskFacts.text}`);
+    const taskAdvice = buildImportantTaskDailyAdvice(taskFacts);
+    if (taskAdvice) advice.push(taskAdvice);
 
     // 重要メールは下部の「📩 重要メール」欄だけに表示する。
     // 「今日の過ごし方」には出さない。
