@@ -1,5 +1,5 @@
 (function(){
-  const GMAIL_FIX_VERSION = "gmail-strict-yesterday-delays-v6";
+  const GMAIL_FIX_VERSION = "gmail-link-to-message-v7";
   const saved = sessionStorage.getItem("dailyBriefingGmailFixVersion") || "";
   if (saved !== GMAIL_FIX_VERSION) {
     sessionStorage.setItem("dailyBriefingGmailFixVersion", GMAIL_FIX_VERSION);
@@ -68,16 +68,10 @@
     const text = `${mail.subject} ${mail.from} ${mail.snippet} ${mail.body || ""}`.toLowerCase();
     const labels = mail.labels || [];
 
-    // Googleアラートは常に非表示
     if (text.includes("google アラート") || text.includes("google alert") || text.includes("googlealerts-noreply")) return true;
-
-    // Gmailのプロモーション分類は常に非表示
     if (labels.includes("CATEGORY_PROMOTIONS")) return true;
-
-    // 完了済み・単なる配送中は非表示。遅延メールだけを拾う。
     if (text.includes("配送中") || text.includes("配達完了") || text.includes("到着済み") || text.includes("お届け済み") || text.includes("注文履歴 配送状況")) return true;
 
-    // 明らかな広告・販促・クーポン系は非表示
     const promoWords = [
       "promotion", "promotions", "campaign", "coupon", "sale", "discount", "newsletter",
       "キャンペーン", "クーポン", "セール", "割引", "引換券", "チャンス",
@@ -85,7 +79,6 @@
     ];
     if (promoWords.some((w) => text.includes(w.toLowerCase()))) return true;
 
-    // 今回ノイズになっていた差出人・件名系
     if (text.includes("google home") || text.includes("スピーカー")) return true;
     if (text.includes("global ai hackathon") || text.includes("hackathon")) return true;
     if (text.includes("くすりエクスプレス") || text.includes("vpass.ne.jp")) return true;
@@ -100,6 +93,11 @@
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 140);
+  }
+
+  function gmailOpenUrl(mail) {
+    if (!mail?.id) return "";
+    return `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(mail.id)}`;
   }
 
   loadImportantMails = async function() {
@@ -176,7 +174,6 @@
     const actionWords = ["至急", "重要", "期限", "要返信", "要対応", "ご対応のお願い", "action required", "確認依頼"];
     const googleApiWords = ["gemini", "imagen", "google ai studio", "google cloud", "vertex ai", "アップグレード", "upgrade"];
 
-    // 配送は「遅延」系の語がある場合だけ重要扱い。配送中・配達完了は isNoiseMail で除外済み。
     if (delayWords.some((w) => text.includes(w.toLowerCase()) || original.includes(w))) {
       score += 90;
       category = "配送遅延";
@@ -229,14 +226,22 @@
   renderMail = function(mail) {
     const title = escapeHtml(mail.subject || "件名なし");
     const category = mail.category ? `<span class="mail-category">${escapeHtml(mail.category)}</span>` : "";
+    const url = gmailOpenUrl(mail);
+    const titleHtml = url
+      ? `<a href="${url}" target="_blank" rel="noopener noreferrer" class="mail-subject-link" style="color:inherit;text-decoration:none;">${title}</a>`
+      : title;
+    const openLink = url
+      ? `<a href="${url}" target="_blank" rel="noopener noreferrer" class="gmail-open-link" style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:6px 10px;border-radius:999px;background:#e8f1ff;color:#1769e0;font-weight:800;text-decoration:none;font-size:0.82rem;">📬 Gmailで開く</a>`
+      : "";
     return `
       <div class="item level-${mail.level} mail-item">
         <div class="mail-title-row">
-          <div class="item__title mail-subject">${title}</div>
+          <div class="item__title mail-subject">${titleHtml}</div>
           <span class="badge">${mail.badge}</span>
         </div>
         <div class="item__meta">${category} From: ${escapeHtml(mail.from)}</div>
         <div class="item__meta">📝 ${escapeHtml(mail.summary)}</div>
+        ${openLink}
       </div>`;
   };
 
