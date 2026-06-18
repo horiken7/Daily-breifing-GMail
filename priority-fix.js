@@ -1,6 +1,6 @@
 // Priority/advice wording patch: use only concrete facts from calendar and task data.
 (function(){
-  const PRIORITY_FIX_VERSION = "priority-calendar-tasks-v5-align-task-lines";
+  const PRIORITY_FIX_VERSION = "priority-calendar-tasks-v6-weather-icon";
   sessionStorage.setItem("dailyBriefingPriorityFixVersion", PRIORITY_FIX_VERSION);
 
   function toMinutes(value) {
@@ -152,7 +152,8 @@
     // 重要メールは下部の「📩 重要メール」欄だけに表示する。
     // 「今日の過ごし方」には出さない。
 
-    advice.push(`☀️ 天気：${escapeHtml(w.label)}、現在${w.tempNow}℃、最高${w.tempMax}℃、最低${w.tempMin}℃、降水確率${w.rain}%です。`);
+    const weatherEmoji = w.emoji || "🌦️";
+    advice.push(`${weatherEmoji} 天気：${escapeHtml(w.label)}、現在${w.tempNow}℃、最高${w.tempMax}℃、最低${w.tempMin}℃、降水確率${w.rain}%です。`);
     if (w.laundry) advice.push(`👕 洗濯：${w.laundry.score}点・${escapeHtml(w.laundry.label)}。`);
     if (w.rain >= 35) advice.push("☔ 雨：傘を準備してください。");
     if (w.tempMax >= 30) advice.push("🥤 暑さ：水分補給を意識してください。");
