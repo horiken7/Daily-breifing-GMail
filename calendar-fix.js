@@ -1,10 +1,16 @@
 (function(){
-  const FIX_VERSION = "calendar-jst-all-v4";
+  const FIX_VERSION = "calendar-exclude-v5";
+  const EXCLUDED_CALENDAR_NAMES = new Set(["日本の祝日", "Trip", "Special day", "Work", "Home"]);
   const saved = sessionStorage.getItem("dailyBriefingCalendarFixVersion") || "";
   if (saved !== FIX_VERSION) {
     sessionStorage.removeItem("dailyBriefingGoogleToken");
     sessionStorage.setItem("dailyBriefingGoogleTokenVersion", FIX_VERSION);
     sessionStorage.setItem("dailyBriefingCalendarFixVersion", FIX_VERSION);
+  }
+
+  function isExcludedCalendar(calendar) {
+    const name = calendar.summary || calendar.id || "";
+    return EXCLUDED_CALENDAR_NAMES.has(name);
   }
 
   function tokyoYmd(date = new Date()) {
@@ -52,7 +58,11 @@
     [{ id: "primary", summary: "メイン", selected: true }, ...calendars]
       .filter((calendar) => calendar.id)
       .forEach((calendar) => byId.set(calendar.id, calendar));
-    return [...byId.values()];
+
+    state.excludedCalendarNames = [...EXCLUDED_CALENDAR_NAMES];
+    state.allCalendarNames = [...byId.values()].map((calendar) => calendar.summary || calendar.id).filter(Boolean);
+
+    return [...byId.values()].filter((calendar) => !isExcludedCalendar(calendar));
   };
 
   fetchCalendarEvents = async function(calendar, start, end) {
@@ -113,16 +123,18 @@
     $("calendarBadge").textContent = state.events.length ? `${state.events.length}件` : "予定なし";
     $("calendarBadge").className = "badge " + (state.events.length ? "badge-yellow" : "badge-green");
     if (state.events.length) {
-      $("calendarList").innerHTML = state.events.map(renderEvent).join("");
+      const excluded = state.excludedCalendarNames?.length ? `<div class="item level-low"><div class="item__title">🚫 対象外カレンダー</div><div class="item__meta">${state.excludedCalendarNames.map(escapeHtml).join(" / ")}</div></div>` : "";
+      $("calendarList").innerHTML = state.events.map(renderEvent).join("") + excluded;
       return;
     }
-    const checked = state.calendarNames.length ? state.calendarNames.join(" / ") : "取得できたカレンダーなし";
+    const checked = state.calendarNames.length ? state.calendarNames.join(" / ") : "取得対象カレンダーなし";
+    const excluded = state.excludedCalendarNames?.length ? state.excludedCalendarNames.join(" / ") : "なし";
     const account = state.googleEmail ? `接続中: ${escapeHtml(state.googleEmail)}<br>` : "";
     const debug = state.calendarDebug;
     const range = debug ? `取得範囲: ${escapeHtml(debug.start)} 〜 ${escapeHtml(debug.end)}<br>` : "";
     const counts = debug?.calendars?.length
       ? debug.calendars.map((calendar) => `${calendar.count > 0 ? "🟡" : calendar.error ? "⚠️" : "⚪"} ${escapeHtml(calendar.name)}: ${calendar.error ? "取得不可" : `${calendar.count}件`}`).join("<br>")
       : "カレンダー別件数なし";
-    $("calendarList").innerHTML = `<div class="item level-low"><div class="item__title">🟢 今日の予定は少なめ</div><div class="item__meta">${account}${range}確認したカレンダー: ${escapeHtml(checked)}<br><br>📊 カレンダー別の取得結果<br>${counts}<br><br>Workに予定があるのに0件の場合は、Google連携を押し直してアカウント選択をやり直してください。</div></div>`;
+    $("calendarList").innerHTML = `<div class="item level-low"><div class="item__title">🟢 今日の予定は少なめ</div><div class="item__meta">${account}${range}取得対象: ${escapeHtml(checked)}<br>🚫 対象外: ${escapeHtml(excluded)}<br><br>📊 カレンダー別の取得結果<br>${counts}</div></div>`;
   };
 })();
