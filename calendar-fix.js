@@ -1,5 +1,5 @@
 (function(){
-  const FIX_VERSION = "calendar-detail-v8";
+  const FIX_VERSION = "calendar-detail-v9";
   const INCLUDED_CALENDAR_NAMES = new Set(["日本の祝日", "Trip", "Special day", "Work", "Home"]);
   const EVENT_COLORS = {
     "1": "#7986cb", "2": "#33b679", "3": "#8e24aa", "4": "#e67c73", "5": "#f6c026", "6": "#f4511e",
@@ -7,7 +7,6 @@
   };
   const saved = sessionStorage.getItem("dailyBriefingCalendarFixVersion") || "";
   if (saved !== FIX_VERSION) {
-    sessionStorage.removeItem("dailyBriefingGoogleToken");
     sessionStorage.setItem("dailyBriefingGoogleTokenVersion", FIX_VERSION);
     sessionStorage.setItem("dailyBriefingCalendarFixVersion", FIX_VERSION);
   }
@@ -178,6 +177,23 @@
     }
 
     const found = state.calendarNames?.length ? state.calendarNames.join(" / ") : "対象カレンダーを検出できませんでした";
-    $("calendarList").innerHTML = `<div class="item level-low"><div class="item__title">🟢 今日の予定はありません</div><div class="item__meta">${escapeHtml(range)}<br>🎯 表示対象: ${escapeHtml(target)}<br>検出した対象: ${escapeHtml(found)}</div></div>`;
+    const counts = state.calendarDebug?.calendars?.length
+      ? state.calendarDebug.calendars.map((calendar) => `${calendar.count > 0 ? "🟡" : calendar.error ? "⚠️" : "⚪"} ${escapeHtml(calendar.name)}: ${calendar.error ? "取得不可" : `${calendar.count}件`}`).join("<br>")
+      : "取得結果なし";
+    $("calendarList").innerHTML = `<div class="item level-low"><div class="item__title">🟢 今日の予定はありません</div><div class="item__meta">${escapeHtml(range)}<br>🎯 表示対象: ${escapeHtml(target)}<br>検出した対象: ${escapeHtml(found)}<br><br>📊 取得結果<br>${counts}</div></div>`;
   };
+
+  setTimeout(async () => {
+    try {
+      if (state?.token) {
+        updateStatus("📅 カレンダー予定を再取得中...");
+        await loadGoogleData();
+        renderAll();
+        updateStatus(`✅ カレンダー予定を再取得しました${state.googleEmail ? `（${state.googleEmail}）` : ""}`);
+      }
+    } catch (error) {
+      console.error(error);
+      updateStatus("⚠️ カレンダー予定の再取得に失敗しました。Google連携を押し直してください。");
+    }
+  }, 400);
 })();
