@@ -1,5 +1,5 @@
 (function(){
-  const GMAIL_FIX_VERSION = "gmail-no-alerts-promotions-v5";
+  const GMAIL_FIX_VERSION = "gmail-strict-yesterday-delays-v6";
   const saved = sessionStorage.getItem("dailyBriefingGmailFixVersion") || "";
   if (saved !== GMAIL_FIX_VERSION) {
     sessionStorage.setItem("dailyBriefingGmailFixVersion", GMAIL_FIX_VERSION);
@@ -21,7 +21,7 @@
     return {
       year: String(base.getUTCFullYear()),
       month: String(base.getUTCMonth() + 1).padStart(2, "0"),
-      day: String(base.getUTCDate()).padStart(2, "0")
+      day: String(base.getUTCDate())
     };
   }
 
@@ -34,7 +34,7 @@
     const yesterday = addDays(today, -1);
     return {
       query: `after:${gmailDate(yesterday)}`,
-      display: `${yesterday.year}/${yesterday.month}/${yesterday.day} 0:00〜現在`,
+      display: `${yesterday.year}/${String(yesterday.month).padStart(2, "0")}/${String(yesterday.day).padStart(2, "0")} 0:00〜現在`,
       yesterday
     };
   }
@@ -74,10 +74,13 @@
     // Gmailのプロモーション分類は常に非表示
     if (labels.includes("CATEGORY_PROMOTIONS")) return true;
 
+    // 完了済み・単なる配送中は非表示。遅延メールだけを拾う。
+    if (text.includes("配送中") || text.includes("配達完了") || text.includes("到着済み") || text.includes("お届け済み") || text.includes("注文履歴 配送状況")) return true;
+
     // 明らかな広告・販促・クーポン系は非表示
     const promoWords = [
-      "promotion", "promotions", "campaign", "coupon", "sale", "discount", "off", "newsletter",
-      "キャンペーン", "クーポン", "セール", "割引", "最大", "%off", "％off", "引換券", "チャンス",
+      "promotion", "promotions", "campaign", "coupon", "sale", "discount", "newsletter",
+      "キャンペーン", "クーポン", "セール", "割引", "引換券", "チャンス",
       "大感謝祭", "リッチクーポン", "プロモーション", "ニュースレター", "メルマガ", "新登場"
     ];
     if (promoWords.some((w) => text.includes(w.toLowerCase()))) return true;
@@ -103,9 +106,9 @@
     const range = mailRangeLabel();
     const queries = [
       { label: "昨日以降", q: `in:anywhere ${range.query} -category:promotions`, max: 50 },
-      { label: "配送遅延", q: `in:anywhere (配送 OR 配達 OR 遅延 OR お届け OR delivery OR shipping OR delayed) newer_than:14d -category:promotions`, max: 30 },
-      { label: "重要語", q: `in:anywhere (重要 OR 至急 OR 期限 OR 要対応 OR ご対応のお願い OR Action Required) newer_than:14d -category:promotions`, max: 30 },
-      { label: "Google AI", q: `in:anywhere (Gemini OR Imagen OR "Google AI Studio" OR "Google Cloud") newer_than:30d -category:promotions`, max: 20 }
+      { label: "配送遅延", q: `in:anywhere ${range.query} (遅延 OR 遅れる OR 遅れ OR delayed OR delay OR late) -category:promotions`, max: 30 },
+      { label: "重要語", q: `in:anywhere ${range.query} (重要 OR 至急 OR 期限 OR 要対応 OR ご対応のお願い OR Action Required) -category:promotions`, max: 30 },
+      { label: "Google AI", q: `in:anywhere ${range.query} (Gemini OR Imagen OR "Google AI Studio" OR "Google Cloud") -category:promotions`, max: 20 }
     ];
 
     state.gmailDebug = { range: range.display, total: 0, fetched: 0, removed: 0, queryResults: [] };
@@ -167,13 +170,14 @@
     let level = "mid";
     let badge = "🟡 確認";
 
-    const deliveryWords = ["配送", "配達", "遅延", "お届け", "発送", "出荷", "delivery", "shipping", "delayed", "delay"];
+    const delayWords = ["遅延", "遅れる", "遅れ", "予定より遅", "delayed", "delay", "late"];
     const securityWords = ["security", "alert", "password", "login", "verify", "不正", "ログイン", "パスワード", "セキュリティ"];
     const moneyWords = ["請求", "支払い", "未払い", "invoice", "payment", "銀行", "証券", "カード"];
     const actionWords = ["至急", "重要", "期限", "要返信", "要対応", "ご対応のお願い", "action required", "確認依頼"];
     const googleApiWords = ["gemini", "imagen", "google ai studio", "google cloud", "vertex ai", "アップグレード", "upgrade"];
 
-    if (deliveryWords.some((w) => text.includes(w.toLowerCase()) || original.includes(w))) {
+    // 配送は「遅延」系の語がある場合だけ重要扱い。配送中・配達完了は isNoiseMail で除外済み。
+    if (delayWords.some((w) => text.includes(w.toLowerCase()) || original.includes(w))) {
       score += 90;
       category = "配送遅延";
       level = "high";
