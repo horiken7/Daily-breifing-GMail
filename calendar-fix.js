@@ -1,6 +1,10 @@
 (function(){
-  const FIX_VERSION = "calendar-include-v6";
+  const FIX_VERSION = "calendar-detail-v7";
   const INCLUDED_CALENDAR_NAMES = new Set(["日本の祝日", "Trip", "Special day", "Work", "Home"]);
+  const EVENT_COLORS = {
+    "1": "#7986cb", "2": "#33b679", "3": "#8e24aa", "4": "#e67c73", "5": "#f6c026", "6": "#f4511e",
+    "7": "#039be5", "8": "#616161", "9": "#3f51b5", "10": "#0b8043", "11": "#d50000"
+  };
   const saved = sessionStorage.getItem("dailyBriefingCalendarFixVersion") || "";
   if (saved !== FIX_VERSION) {
     sessionStorage.removeItem("dailyBriefingGoogleToken");
@@ -14,12 +18,7 @@
   }
 
   function tokyoYmd(date = new Date()) {
-    const parts = new Intl.DateTimeFormat("ja-JP", {
-      timeZone: "Asia/Tokyo",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit"
-    }).formatToParts(date);
+    const parts = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
     const get = (type) => parts.find((p) => p.type === type)?.value || "";
     return { year: get("year"), month: get("month"), day: get("day") };
   }
@@ -39,7 +38,8 @@
     return {
       start: `${today.year}-${today.month}-${today.day}T00:00:00+09:00`,
       end: `${tomorrow.year}-${tomorrow.month}-${tomorrow.day}T00:00:00+09:00`,
-      label: `${today.year}-${today.month}-${today.day}`
+      label: `${today.year}-${today.month}-${today.day}`,
+      display: `${today.year}/${today.month}/${today.day} 0:00〜24:00`
     };
   };
 
@@ -55,13 +55,9 @@
     } while (pageToken);
 
     const byId = new Map();
-    calendars
-      .filter((calendar) => calendar.id)
-      .forEach((calendar) => byId.set(calendar.id, calendar));
-
+    calendars.filter((calendar) => calendar.id).forEach((calendar) => byId.set(calendar.id, calendar));
     state.includedCalendarNames = [...INCLUDED_CALENDAR_NAMES];
     state.allCalendarNames = [...byId.values()].map((calendar) => calendar.summary || calendar.id).filter(Boolean);
-
     return [...byId.values()].filter((calendar) => isIncludedCalendar(calendar));
   };
 
@@ -87,8 +83,30 @@
     return events;
   };
 
+  normalizeEvent = function(event, calendar = {}) {
+    const startRaw = event.start?.dateTime || event.start?.date;
+    const endRaw = event.end?.dateTime || event.end?.date;
+    const allDay = Boolean(event.start?.date);
+    const color = EVENT_COLORS[event.colorId] || calendar.backgroundColor || "#5484ed";
+    return {
+      id: event.id || "",
+      calendarId: calendar.id || "",
+      title: event.summary || "予定あり",
+      location: event.location || "",
+      description: event.description || "",
+      start: startRaw,
+      end: endRaw,
+      dateSort: startRaw,
+      allDay,
+      status: event.status || "confirmed",
+      calendarName: calendar.summary || "カレンダー",
+      calendarColor: color,
+      icon: eventIcon(`${event.summary || ""} ${calendar.summary || ""}`)
+    };
+  };
+
   loadTodayCalendarEvents = async function() {
-    const { start, end } = getTodayRange();
+    const { start, end, display } = getTodayRange();
     const calendars = await loadVisibleCalendars();
     const debug = [];
     state.calendarNames = calendars.map((calendar) => calendar.summary || calendar.id).filter(Boolean);
@@ -109,10 +127,28 @@
       const key = `${event.calendarId || ""}:${event.id || ""}:${event.start || event.dateSort}:${event.title}`;
       unique.set(key, event);
     });
-    state.calendarDebug = { start, end, calendars: debug };
-    return [...unique.values()]
-      .filter((event) => event.status !== "cancelled")
-      .sort((a, b) => new Date(a.start || a.dateSort) - new Date(b.start || b.dateSort));
+    state.calendarDebug = { start, end, display, calendars: debug };
+    return [...unique.values()].filter((event) => event.status !== "cancelled").sort((a, b) => new Date(a.start || a.dateSort) - new Date(b.start || b.dateSort));
+  };
+
+  function formatEventTime(event) {
+    if (event.allDay) return "終日";
+    return `${formatTime(event.start)}-${formatTime(event.end)}`;
+  }
+
+  renderEvent = function(event) {
+    const color = event.calendarColor || "#5484ed";
+    const time = formatEventTime(event);
+    const location = event.location ? `<div class="item__meta">📍 ${escapeHtml(event.location)}</div>` : "";
+    const calendar = event.calendarName ? `<div class="item__meta">📁 ${escapeHtml(event.calendarName)}</div>` : "";
+    return `
+      <div class="item level-mid" style="border-left-color:${escapeHtml(color)}">
+        <div class="item__title" style="font-size:1.05rem;line-height:1.6;">
+          <span style="color:${escapeHtml(color)};font-size:1.25rem;vertical-align:-1px;">●</span>${escapeHtml(time)}　${escapeHtml(event.title)}
+        </div>
+        ${calendar}
+        ${location}
+      </div>`;
   };
 
   renderCalendar = function() {
@@ -120,21 +156,18 @@
       $("calendarBadge").textContent = "未接続";
       return;
     }
-    $("calendarBadge").textContent = state.events.length ? `${state.events.length}件` : "予定なし";
+    const range = state.calendarDebug?.display || getTodayRange().display;
+    $("calendarBadge").textContent = state.events.length ? "予定あり" : "予定なし";
     $("calendarBadge").className = "badge " + (state.events.length ? "badge-yellow" : "badge-green");
+
+    const target = state.includedCalendarNames?.length ? state.includedCalendarNames.join(" / ") : "なし";
+    const rangeCard = `<div class="item level-low"><div class="item__title">🕛 取得範囲</div><div class="item__meta">${escapeHtml(range)}<br>🎯 表示対象: ${escapeHtml(target)}</div></div>`;
+
     if (state.events.length) {
-      const target = state.includedCalendarNames?.length ? `<div class="item level-low"><div class="item__title">🎯 表示対象カレンダー</div><div class="item__meta">${state.includedCalendarNames.map(escapeHtml).join(" / ")}</div></div>` : "";
-      $("calendarList").innerHTML = state.events.map(renderEvent).join("") + target;
+      $("calendarList").innerHTML = state.events.map(renderEvent).join("") + rangeCard;
       return;
     }
-    const checked = state.calendarNames.length ? state.calendarNames.join(" / ") : "表示対象カレンダーなし";
-    const target = state.includedCalendarNames?.length ? state.includedCalendarNames.join(" / ") : "なし";
-    const account = state.googleEmail ? `接続中: ${escapeHtml(state.googleEmail)}<br>` : "";
-    const debug = state.calendarDebug;
-    const range = debug ? `取得範囲: ${escapeHtml(debug.start)} 〜 ${escapeHtml(debug.end)}<br>` : "";
-    const counts = debug?.calendars?.length
-      ? debug.calendars.map((calendar) => `${calendar.count > 0 ? "🟡" : calendar.error ? "⚠️" : "⚪"} ${escapeHtml(calendar.name)}: ${calendar.error ? "取得不可" : `${calendar.count}件`}`).join("<br>")
-      : "カレンダー別件数なし";
-    $("calendarList").innerHTML = `<div class="item level-low"><div class="item__title">🟢 今日の予定は少なめ</div><div class="item__meta">${account}${range}🎯 表示対象: ${escapeHtml(target)}<br>取得できた対象: ${escapeHtml(checked)}<br><br>📊 カレンダー別の取得結果<br>${counts}</div></div>`;
+
+    $("calendarList").innerHTML = `<div class="item level-low"><div class="item__title">🟢 今日の予定はありません</div><div class="item__meta">${escapeHtml(range)}<br>🎯 表示対象: ${escapeHtml(target)}</div></div>`;
   };
 })();
