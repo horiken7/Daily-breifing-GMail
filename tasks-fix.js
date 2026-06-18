@@ -1,6 +1,6 @@
 // Google Tasks patch: show incomplete overdue tasks and incomplete tasks due within 7 days.
 (function(){
-  const TASKS_FIX_VERSION = "tasks-overdue-next7-v2-friendly-error";
+  const TASKS_FIX_VERSION = "tasks-overdue-next7-v3-refresh-priority";
   const TOKEN_VERSION_TASKS = "google-tasks-readonly-v1";
   sessionStorage.setItem("dailyBriefingTasksFixVersion", TASKS_FIX_VERSION);
 
@@ -199,6 +199,8 @@
       state.tasksDebug = { error: shortTasksError(error) };
     }
     renderTasks();
+    if (typeof renderPriority === "function") renderPriority();
+    if (typeof renderDailyAdvice === "function") renderDailyAdvice();
   }
 
   function renderTask(task) {
