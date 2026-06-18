@@ -146,20 +146,49 @@ async function googleFetch(url) {
 
 async function loadTodayCalendarEvents() {
   const { start, end } = getTodayRange();
-  const params = new URLSearchParams({
-    timeMin: start,
-    timeMax: end,
-    singleEvents: "true",
-    orderBy: "startTime",
-    maxResults: "20",
-    timeZone: "Asia/Tokyo"
-  });
-  const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`;
-  const data = await googleFetch(url);
-  return (data.items || []).map(normalizeEvent);
+  const calendars = await loadVisibleCalendars();
+
+  const eventLists = await Promise.all(calendars.map(async (calendar) => {
+    const params = new URLSearchParams({
+      timeMin: start,
+      timeMax: end,
+      singleEvents: "true",
+      orderBy: "startTime",
+      maxResults: "30",
+      timeZone: "Asia/Tokyo"
+    });
+    const calendarId = encodeURIComponent(calendar.id);
+    const url = `https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events?${params}`;
+    try {
+      const data = await googleFetch(url);
+      return (data.items || []).map((event) => normalizeEvent(event, calendar));
+    } catch (error) {
+      console.warn(`カレンダー取得をスキップしました: ${calendar.summary}`, error);
+      return [];
+    }
+  }));
+
+  return eventLists
+    .flat()
+    .filter((event) => event.status !== "cancelled")
+    .sort((a, b) => new Date(a.start || a.dateSort) - new Date(b.start || b.dateSort));
 }
 
-function normalizeEvent(event) {
+async function loadVisibleCalendars() {
+  const params = new URLSearchParams({
+    minAccessRole: "reader",
+    showHidden: "false"
+  });
+  const url = `https://www.googleapis.com/calendar/v3/users/me/calendarList?${params}`;
+  const data = await googleFetch(url);
+  const calendars = (data.items || [])
+    .filter((calendar) => calendar.id && !calendar.hidden && calendar.selected !== false)
+    .filter((calendar) => calendar.accessRole !== "freeBusyReader");
+
+  return calendars.length ? calendars : [{ id: "primary", summary: "メイン" }];
+}
+
+function normalizeEvent(event, calendar = {}) {
   const startRaw = event.start?.dateTime || event.start?.date;
   const endRaw = event.end?.dateTime || event.end?.date;
   const allDay = Boolean(event.start?.date);
@@ -169,8 +198,11 @@ function normalizeEvent(event) {
     description: event.description || "",
     start: startRaw,
     end: endRaw,
+    dateSort: startRaw,
     allDay,
-    icon: eventIcon(event.summary || "")
+    status: event.status || "confirmed",
+    calendarName: calendar.summary || "カレンダー",
+    icon: eventIcon(`${event.summary || ""} ${calendar.summary || ""}`)
   };
 }
 
@@ -359,7 +391,7 @@ function getTodayRange() {
 
 function requestLocationWeather() {
   if (!navigator.geolocation) {
-    updateStatus("⚠️ このブラウザでは位置情報が使えません。初期地点で表示します。");
+    updateStatus("⚠️ このブラウザでは位置情報が使えません。初期地点で表示します。叩き台で表示します。");
     return;
   }
 
@@ -539,18 +571,20 @@ function renderCalendar() {
   $("calendarBadge").className = "badge " + (state.events.length ? "badge-yellow" : "badge-green");
   $("calendarList").innerHTML = state.events.length
     ? state.events.map(renderEvent).join("")
-    : `<div class="item level-low"><div class="item__title">🟢 今日の予定は少なめ</div><div class="item__meta">予定が入っていないか、取得対象がありません。</div></div>`;
+    : `<div class="item level-low"><div class="item__title">🟢 今日の予定は少なめ</div><div class="item__meta">表示中のGoogleカレンダーを確認しましたが、今日の予定は見つかりませんでした。</div></div>`;
 }
 
 function renderEvent(event) {
   const time = event.allDay ? "終日" : `${formatTime(event.start)}-${formatTime(event.end)}`;
   const location = event.location ? `<div class="item__meta">📍 ${escapeHtml(event.location)}</div>` : "";
+  const calendar = event.calendarName ? `<div class="item__meta">📁 ${escapeHtml(event.calendarName)}</div>` : "";
   return `
     <div class="item level-mid">
       <div class="item__top">
         <div class="item__title">${event.icon} ${time} ${escapeHtml(event.title)}</div>
         <span class="badge badge-yellow">🟡 予定</span>
       </div>
+      ${calendar}
       ${location}
     </div>
   `;
@@ -610,7 +644,7 @@ function renderPriority() {
 function renderGoogleDisconnected() {
   $("calendarBadge").textContent = "未接続";
   $("gmailBadge").textContent = "未接続";
-  $("calendarList").innerHTML = `<div class="item level-mid"><div class="item__title">📅 Google連携待ち</div><div class="item__meta">「🔐 Google連携」を押すと、今日の予定を読み取ります。</div></div>`;
+  $("calendarList").innerHTML = `<div class="item level-mid"><div class="item__title">📅 Google連携待ち</div><div class="item__meta">「🔐 Google連携」を押すと、Home / Work / Trip など表示中のカレンダーから今日の予定を読み取ります。</div></div>`;
   $("gmailList").innerHTML = `<div class="item level-mid"><div class="item__title">📩 Google連携待ち</div><div class="item__meta">「🔐 Google連携」を押すと、直近7日のメール本文を確認し、重要メールまたは直近メールを要約します。</div></div>`;
 }
 
@@ -677,7 +711,7 @@ function escapeHtml(value = "") {
 function handleGoogleError(error) {
   console.error(error);
   if (String(error.message).includes("TOKEN_EXPIRED")) {
-    updateStatus("🔐 Google連携の有効期限が切れました。もう一度 Google連携 を押してください。");
+    updateStatus("🔐 Google連携の有効期限が切れました。もう一度 Google連携 を押してください。複数カレンダー取得のため、再認証が必要な場合があります。");
     renderGoogleDisconnected();
     return;
   }
