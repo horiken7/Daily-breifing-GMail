@@ -1,5 +1,5 @@
 (function(){
-  const GMAIL_FIX_VERSION = "gmail-yesterday-now-v1";
+  const GMAIL_FIX_VERSION = "gmail-multi-query-v2";
   sessionStorage.setItem("dailyBriefingGmailFixVersion", GMAIL_FIX_VERSION);
 
   function tokyoYmdParts(date = new Date()) {
@@ -36,22 +36,46 @@
     };
   }
 
-  loadImportantMails = async function() {
-    const range = mailRangeLabel();
-    state.gmailDebug = { range: range.display, query: range.query, total: 0, fetched: 0 };
-
+  async function searchMessageIds(query, maxResults = 30) {
     const params = new URLSearchParams({
-      q: `${range.query} -in:spam -in:trash`,
-      maxResults: "80",
-      includeSpamTrash: "false"
+      q: query,
+      maxResults: String(maxResults),
+      includeSpamTrash: "true"
     });
     const listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params}`;
     const list = await googleFetch(listUrl);
-    const messages = list.messages || [];
+    return list.messages || [];
+  }
+
+  loadImportantMails = async function() {
+    const range = mailRangeLabel();
+    const queries = [
+      { label: "広め", q: `in:anywhere newer_than:3d` },
+      { label: "昨日以降", q: `in:anywhere ${range.query}` },
+      { label: "Gemini", q: `in:anywhere (Gemini OR Imagen OR "Google AI Studio" OR "Google Cloud") newer_than:30d` },
+      { label: "対応お願い", q: `in:anywhere ("ご対応のお願い" OR "Action Required" OR upgrade OR アップグレード) newer_than:30d` },
+      { label: "Imagen直接", q: `in:anywhere Imagen newer_than:60d` }
+    ];
+
+    state.gmailDebug = { range: range.display, query: queries.map((x) => `${x.label}: ${x.q}`).join(" / "), total: 0, fetched: 0, queryResults: [] };
+
+    const idMap = new Map();
+    for (const item of queries) {
+      try {
+        const messages = await searchMessageIds(item.q, item.label === "広め" ? 60 : 20);
+        state.gmailDebug.queryResults.push({ label: item.label, q: item.q, count: messages.length });
+        messages.forEach((msg) => idMap.set(msg.id, msg));
+      } catch (error) {
+        console.warn(`Gmail検索に失敗: ${item.label}`, error);
+        state.gmailDebug.queryResults.push({ label: item.label, q: item.q, count: 0, error: true });
+      }
+    }
+
+    const messages = [...idMap.values()];
     state.gmailDebug.total = messages.length;
     if (!messages.length) return [];
 
-    const details = await Promise.all(messages.slice(0, 50).map(async (msg) => {
+    const details = await Promise.all(messages.slice(0, 80).map(async (msg) => {
       const detailParams = new URLSearchParams({ format: "full" });
       const detailUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?${detailParams}`;
       const detail = await googleFetch(detailUrl);
@@ -59,6 +83,8 @@
     }));
 
     state.gmailDebug.fetched = details.length;
+    state.gmailDebug.subjects = details.slice(0, 12).map((mail) => mail.subject);
+
     const scored = details
       .map(scoreMail)
       .sort((a, b) => b.score - a.score);
@@ -87,7 +113,7 @@
     let badge = "🟡 確認推奨";
 
     const googleActionWords = [
-      "ご対応のお願い", "gemini api", "imagen", "モデル", "アップグレード", "upgrade", "api", "google cloud", "vertex ai", "2026 年 8 月 17 日", "2026年8月17日"
+      "ご対応のお願い", "gemini api", "gemini", "imagen", "モデル", "アップグレード", "upgrade", "api", "google cloud", "google ai studio", "vertex ai", "2026 年 8 月 17 日", "2026年8月17日"
     ];
     const highWords = ["至急", "重要", "期限", "要返信", "確認依頼", "承認依頼", "支払い", "請求", "未払い", "督促", "security", "alert", "password", "login", "invoice", "payment", "action required", "verify", "対応", "お願い"];
     const travelWords = ["予約", "reservation", "booking", "hotel", "flight", "航空", "宿泊", "旅行", "チェックイン"];
@@ -153,7 +179,13 @@
     $("gmailBadge").className = "badge " + (highCount ? "badge-red" : checkCount ? "badge-yellow" : "badge-green");
     const account = state.googleEmail ? `接続中: ${escapeHtml(state.googleEmail)}<br>` : "";
     const range = state.gmailDebug?.range || mailRangeLabel().display;
-    const debug = state.gmailDebug ? `<br>検索範囲: ${escapeHtml(range)}<br>検索結果: ${state.gmailDebug.total ?? 0}件 / 詳細取得: ${state.gmailDebug.fetched ?? 0}件` : `<br>検索範囲: ${escapeHtml(range)}`;
+    const queryResults = state.gmailDebug?.queryResults?.length
+      ? `<br><br>検索別結果<br>${state.gmailDebug.queryResults.map((r) => `${r.error ? "⚠️" : "🔎"} ${escapeHtml(r.label)}: ${r.count}件`).join("<br>")}`
+      : "";
+    const subjects = state.gmailDebug?.subjects?.length
+      ? `<br><br>取得件名<br>${state.gmailDebug.subjects.map((s) => `・${escapeHtml(s)}`).join("<br>")}`
+      : "";
+    const debug = state.gmailDebug ? `<br>検索範囲: ${escapeHtml(range)}<br>重複除外後: ${state.gmailDebug.total ?? 0}件 / 詳細取得: ${state.gmailDebug.fetched ?? 0}件${queryResults}${subjects}` : `<br>検索範囲: ${escapeHtml(range)}`;
     $("gmailList").innerHTML = state.mails.length
       ? state.mails.map(renderMail).join("") + `<div class="item level-low"><div class="item__title">🔎 Gmail検索条件</div><div class="item__meta">${account}${debug}</div></div>`
       : `<div class="item level-low"><div class="item__title">🟢 対象メールなし</div><div class="item__meta">${account}昨日から現在までのGmailを確認しましたが、表示できるメールが見つかりませんでした。${debug}</div></div>`;
@@ -162,7 +194,7 @@
   setTimeout(async () => {
     try {
       if (state?.token) {
-        updateStatus("📩 Gmailを昨日から現在までで再取得中...");
+        updateStatus("📩 Gmailを複数条件で再取得中...");
         state.mails = await loadImportantMails();
         renderMails();
         renderPriority();
