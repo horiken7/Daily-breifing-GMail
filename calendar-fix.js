@@ -1,5 +1,5 @@
 (function(){
-  const FIX_VERSION = "calendar-detail-v7";
+  const FIX_VERSION = "calendar-detail-v8";
   const INCLUDED_CALENDAR_NAMES = new Set(["日本の祝日", "Trip", "Special day", "Work", "Home"]);
   const EVENT_COLORS = {
     "1": "#7986cb", "2": "#33b679", "3": "#8e24aa", "4": "#e67c73", "5": "#f6c026", "6": "#f4511e",
@@ -12,9 +12,17 @@
     sessionStorage.setItem("dailyBriefingCalendarFixVersion", FIX_VERSION);
   }
 
+  function normalizeCalendarName(value = "") {
+    return String(value).trim().replace(/\s+/g, " ");
+  }
+
+  function calendarDisplayName(calendar = {}) {
+    return normalizeCalendarName(calendar.summaryOverride || calendar.summary || calendar.id || "");
+  }
+
   function isIncludedCalendar(calendar) {
-    const name = calendar.summary || calendar.id || "";
-    return INCLUDED_CALENDAR_NAMES.has(name);
+    const names = [calendar.summaryOverride, calendar.summary, calendar.id].map(normalizeCalendarName);
+    return names.some((name) => INCLUDED_CALENDAR_NAMES.has(name));
   }
 
   function tokyoYmd(date = new Date()) {
@@ -57,7 +65,7 @@
     const byId = new Map();
     calendars.filter((calendar) => calendar.id).forEach((calendar) => byId.set(calendar.id, calendar));
     state.includedCalendarNames = [...INCLUDED_CALENDAR_NAMES];
-    state.allCalendarNames = [...byId.values()].map((calendar) => calendar.summary || calendar.id).filter(Boolean);
+    state.allCalendarNames = [...byId.values()].map(calendarDisplayName).filter(Boolean);
     return [...byId.values()].filter((calendar) => isIncludedCalendar(calendar));
   };
 
@@ -88,6 +96,7 @@
     const endRaw = event.end?.dateTime || event.end?.date;
     const allDay = Boolean(event.start?.date);
     const color = EVENT_COLORS[event.colorId] || calendar.backgroundColor || "#5484ed";
+    const name = calendarDisplayName(calendar) || "カレンダー";
     return {
       id: event.id || "",
       calendarId: calendar.id || "",
@@ -99,9 +108,9 @@
       dateSort: startRaw,
       allDay,
       status: event.status || "confirmed",
-      calendarName: calendar.summary || "カレンダー",
+      calendarName: name,
       calendarColor: color,
-      icon: eventIcon(`${event.summary || ""} ${calendar.summary || ""}`)
+      icon: eventIcon(`${event.summary || ""} ${name}`)
     };
   };
 
@@ -109,9 +118,9 @@
     const { start, end, display } = getTodayRange();
     const calendars = await loadVisibleCalendars();
     const debug = [];
-    state.calendarNames = calendars.map((calendar) => calendar.summary || calendar.id).filter(Boolean);
+    state.calendarNames = calendars.map(calendarDisplayName).filter(Boolean);
     const eventLists = await Promise.all(calendars.map(async (calendar) => {
-      const name = calendar.summary || calendar.id;
+      const name = calendarDisplayName(calendar);
       try {
         const events = await fetchCalendarEvents(calendar, start, end);
         debug.push({ name, count: events.length, selected: calendar.selected !== false });
@@ -168,6 +177,7 @@
       return;
     }
 
-    $("calendarList").innerHTML = `<div class="item level-low"><div class="item__title">🟢 今日の予定はありません</div><div class="item__meta">${escapeHtml(range)}<br>🎯 表示対象: ${escapeHtml(target)}</div></div>`;
+    const found = state.calendarNames?.length ? state.calendarNames.join(" / ") : "対象カレンダーを検出できませんでした";
+    $("calendarList").innerHTML = `<div class="item level-low"><div class="item__title">🟢 今日の予定はありません</div><div class="item__meta">${escapeHtml(range)}<br>🎯 表示対象: ${escapeHtml(target)}<br>検出した対象: ${escapeHtml(found)}</div></div>`;
   };
 })();
