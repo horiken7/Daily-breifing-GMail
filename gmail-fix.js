@@ -1,8 +1,7 @@
 (function(){
-  const GMAIL_FIX_VERSION = "gmail-force-scope-reset-v3";
+  const GMAIL_FIX_VERSION = "gmail-clean-priority-v4";
   const saved = sessionStorage.getItem("dailyBriefingGmailFixVersion") || "";
   if (saved !== GMAIL_FIX_VERSION) {
-    sessionStorage.removeItem("dailyBriefingGoogleToken");
     sessionStorage.setItem("dailyBriefingGmailFixVersion", GMAIL_FIX_VERSION);
   }
 
@@ -65,24 +64,39 @@
     return list.messages || [];
   }
 
+  function isNoiseMail(mail) {
+    const text = `${mail.subject} ${mail.from} ${mail.snippet}`.toLowerCase();
+    if (text.includes("google アラート") || text.includes("google alert")) return true;
+    if (text.includes("global ai hackathon") || text.includes("hackathon")) return true;
+    if (text.includes("newsletter") || text.includes("ニュースレター") || text.includes("campaign") || text.includes("キャンペーン")) return true;
+    if (text.includes("新登場") || text.includes("スピーカー") || text.includes("google home")) return true;
+    return false;
+  }
+
+  function normalizeSummary(text = "") {
+    return String(text)
+      .replace(/https?:\/\/\S+/g, "")
+      .replace(/<br\s*\/?>(\s*)/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 140);
+  }
+
   loadImportantMails = async function() {
     const range = mailRangeLabel();
     const queries = [
-      { label: "広め", q: `in:anywhere newer_than:3d` },
-      { label: "昨日以降", q: `in:anywhere ${range.query}` },
-      { label: "Gemini", q: `in:anywhere Gemini newer_than:60d` },
-      { label: "Imagen", q: `in:anywhere Imagen newer_than:60d` },
-      { label: "Google AI Studio", q: `in:anywhere from:googleaistudio-noreply@google.com newer_than:60d` },
-      { label: "対応お願い", q: `in:anywhere "ご対応のお願い" newer_than:60d` },
-      { label: "Action Required", q: `in:anywhere "Action Required" newer_than:60d` }
+      { label: "昨日以降", q: `in:anywhere ${range.query}`, max: 50 },
+      { label: "配送遅延", q: `in:anywhere (配送 OR 配達 OR 遅延 OR お届け OR delivery OR shipping OR delayed) newer_than:14d`, max: 30 },
+      { label: "重要語", q: `in:anywhere (重要 OR 至急 OR 期限 OR 要対応 OR ご対応のお願い OR Action Required) newer_than:14d`, max: 30 },
+      { label: "Google AI", q: `in:anywhere (Gemini OR Imagen OR "Google AI Studio" OR "Google Cloud") newer_than:30d`, max: 20 }
     ];
 
-    state.gmailDebug = { range: range.display, query: queries.map((x) => `${x.label}: ${x.q}`).join(" / "), total: 0, fetched: 0, queryResults: [] };
+    state.gmailDebug = { range: range.display, total: 0, fetched: 0, queryResults: [] };
 
     const idMap = new Map();
     for (const item of queries) {
       try {
-        const messages = await searchMessageIds(item.q, item.label === "広め" ? 80 : 30);
+        const messages = await searchMessageIds(item.q, item.max);
         state.gmailDebug.queryResults.push({ label: item.label, q: item.q, count: messages.length });
         messages.forEach((msg) => idMap.set(msg.id, msg));
       } catch (error) {
@@ -96,7 +110,7 @@
     state.gmailDebug.total = messages.length;
     if (!messages.length) return [];
 
-    const details = await Promise.all(messages.slice(0, 80).map(async (msg) => {
+    const details = await Promise.all(messages.slice(0, 60).map(async (msg) => {
       const detailParams = new URLSearchParams({ format: "full" });
       const detailUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?${detailParams}`;
       const detail = await googleFetch(detailUrl);
@@ -104,23 +118,24 @@
     }));
 
     state.gmailDebug.fetched = details.length;
-    state.gmailDebug.subjects = details.slice(0, 12).map((mail) => mail.subject);
+    state.gmailDebug.subjects = details.slice(0, 8).map((mail) => mail.subject);
 
     const scored = details
       .map(scoreMail)
+      .filter((mail) => !isNoiseMail(mail) || mail.score >= 80)
       .sort((a, b) => b.score - a.score);
 
     const important = scored
-      .filter((mail) => mail.score >= 20 && mail.level !== "low")
-      .slice(0, 8);
+      .filter((mail) => mail.score >= 45 && mail.level !== "low")
+      .slice(0, 5);
 
-    if (important.length) return important;
+    if (important.length) return important.slice(0, 5);
 
-    return scored.slice(0, 8).map((mail) => ({
+    return scored.slice(0, 3).map((mail) => ({
       ...mail,
-      level: "low",
-      badge: "🟢 直近",
-      type: mail.type === "📩 確認" ? "📩 直近メール" : mail.type,
+      level: mail.score >= 30 ? "mid" : "low",
+      badge: mail.score >= 30 ? "🟡 確認" : "🟢 直近",
+      category: mail.category || "直近メール",
       summary: mail.summary || mail.snippet || "本文の要約はありません。"
     }));
   };
@@ -128,65 +143,85 @@
   scoreMail = function(mail) {
     const text = `${mail.subject} ${mail.from} ${mail.snippet} ${mail.body}`.toLowerCase();
     const original = `${mail.subject} ${mail.from} ${mail.snippet} ${mail.body}`;
-    let score = mail.labels.includes("UNREAD") ? 12 : 0;
-    let type = "📩 確認";
+    let score = mail.labels.includes("IMPORTANT") ? 20 : mail.labels.includes("UNREAD") ? 8 : 0;
+    let category = "確認";
     let level = "mid";
-    let badge = "🟡 確認推奨";
+    let badge = "🟡 確認";
 
-    const googleActionWords = [
-      "ご対応のお願い", "gemini api", "gemini", "imagen", "モデル", "アップグレード", "upgrade", "api", "google cloud", "google ai studio", "vertex ai", "2026 年 8 月 17 日", "2026年8月17日"
-    ];
-    const highWords = ["至急", "重要", "期限", "要返信", "確認依頼", "承認依頼", "支払い", "請求", "未払い", "督促", "security", "alert", "password", "login", "invoice", "payment", "action required", "verify", "対応", "お願い"];
-    const travelWords = ["予約", "reservation", "booking", "hotel", "flight", "航空", "宿泊", "旅行", "チェックイン"];
-    const changeWords = ["変更", "キャンセル", "遅延", "中止", "欠航", "運休", "cancel", "delay", "changed", "canceled"];
-    const workWords = ["会議", "打ち合わせ", "面談", "見積", "納期", "仕様", "契約", "注文", "発注", "納品", "meeting", "deadline", "quote", "contract"];
-    const lowWords = ["newsletter", "ニュースレター", "campaign", "キャンペーン", "メルマガ", "sale", "セール", "広告"];
+    const deliveryWords = ["配送", "配達", "遅延", "お届け", "発送", "出荷", "delivery", "shipping", "delayed", "delay"];
+    const securityWords = ["security", "alert", "password", "login", "verify", "不正", "ログイン", "パスワード", "セキュリティ"];
+    const moneyWords = ["請求", "支払い", "未払い", "invoice", "payment", "銀行", "証券", "カード"];
+    const actionWords = ["至急", "重要", "期限", "要返信", "要対応", "ご対応のお願い", "action required", "確認依頼"];
+    const googleApiWords = ["gemini", "imagen", "google ai studio", "google cloud", "vertex ai", "アップグレード", "upgrade"];
 
-    if (googleActionWords.some((w) => text.includes(w.toLowerCase()) || original.includes(w))) {
+    if (deliveryWords.some((w) => text.includes(w.toLowerCase()) || original.includes(w))) {
+      score += 90;
+      category = "配送遅延";
+      level = "high";
+      badge = "🔴 重要";
+    }
+    if (securityWords.some((w) => text.includes(w.toLowerCase()) || original.includes(w))) {
       score += 80;
+      category = "セキュリティ";
       level = "high";
       badge = "🔴 重要";
-      type = "🔴 Google/API対応";
     }
-    if (highWords.some((w) => text.includes(w.toLowerCase()) || original.includes(w))) {
-      score += 45;
+    if (moneyWords.some((w) => text.includes(w.toLowerCase()) || original.includes(w))) {
+      score += 65;
+      category = "支払い・金融";
       level = "high";
       badge = "🔴 重要";
-      if (type === "📩 確認") type = "📩 要確認";
     }
-    if (travelWords.some((w) => text.includes(w.toLowerCase()) || original.includes(w))) {
-      score += 24;
-      if (type === "📩 確認") type = "🧳 予約・旅行";
-      if (level !== "high") badge = "🟡 予約確認";
+    if (actionWords.some((w) => text.includes(w.toLowerCase()) || original.includes(w))) {
+      score += 35;
+      if (category === "確認") category = "要確認";
+      if (score >= 55) {
+        level = "high";
+        badge = "🔴 重要";
+      }
     }
-    if (changeWords.some((w) => text.includes(w.toLowerCase()) || original.includes(w))) {
-      score += 38;
-      level = level === "high" ? "high" : "warn";
-      badge = level === "high" ? "🔴 重要" : "⚠️ 注意";
-      if (type === "📩 確認") type = "🔁 変更通知";
-    }
-    if (workWords.some((w) => text.includes(w.toLowerCase()) || original.includes(w))) {
-      score += 22;
-      if (type === "📩 確認") type = "💼 仕事・手続き";
-    }
-    if (text.includes("証券") || text.includes("銀行") || text.includes("sbi") || text.includes("rakuten") || text.includes("楽天")) {
+    // Google/API系は「配送・セキュリティ・支払い」より低め。件名に分類名は付けない。
+    if (googleApiWords.some((w) => text.includes(w.toLowerCase()) || original.includes(w))) {
       score += 18;
-      if (type === "📩 確認") type = "📈 金融関連";
+      if (category === "確認") category = "Google/API通知";
+      if (level !== "high") {
+        level = "mid";
+        badge = "🟡 確認";
+      }
     }
-    if (lowWords.some((w) => text.includes(w.toLowerCase()) || original.includes(w)) && score < 45) {
-      score -= 22;
+    if (isNoiseMail(mail) && score < 80) {
+      score -= 50;
       level = "low";
       badge = "🟢 通常";
+      if (category === "確認") category = "通常";
     }
-    if (score >= 55) {
+
+    if (score >= 70) {
       level = "high";
       badge = "🔴 重要";
     } else if (score >= 35 && level !== "high") {
-      level = "warn";
-      badge = "⚠️ 注意";
+      level = "mid";
+      badge = "🟡 確認";
+    } else if (score < 35) {
+      level = "low";
+      badge = "🟢 通常";
     }
 
-    return { ...mail, score, level, badge, type };
+    return { ...mail, score, level, badge, category, summary: normalizeSummary(mail.summary || mail.snippet || mail.body || "") };
+  };
+
+  renderMail = function(mail) {
+    const title = escapeHtml(mail.subject || "件名なし");
+    const category = mail.category ? `<span class="mail-category">${escapeHtml(mail.category)}</span>` : "";
+    return `
+      <div class="item level-${mail.level} mail-item">
+        <div class="mail-title-row">
+          <div class="item__title mail-subject">${title}</div>
+          <span class="badge">${mail.badge}</span>
+        </div>
+        <div class="item__meta">${category} From: ${escapeHtml(mail.from)}</div>
+        <div class="item__meta">📝 ${escapeHtml(mail.summary)}</div>
+      </div>`;
   };
 
   renderMails = function() {
@@ -201,28 +236,23 @@
     const account = state.googleEmail ? `接続中: ${escapeHtml(state.googleEmail)}<br>` : "";
     const range = state.gmailDebug?.range || mailRangeLabel().display;
     const queryResults = state.gmailDebug?.queryResults?.length
-      ? `<br><br>検索別結果<br>${state.gmailDebug.queryResults.map((r) => `${r.error ? "⚠️" : "🔎"} ${escapeHtml(r.label)}: ${r.count}件${r.message ? `：${escapeHtml(r.message)}` : ""}`).join("<br>")}`
+      ? `<details class="debug-details"><summary>🔎 Gmail検索条件</summary>${state.gmailDebug.queryResults.map((r) => `${r.error ? "⚠️" : "🔎"} ${escapeHtml(r.label)}: ${r.count}件${r.message ? `：${escapeHtml(r.message)}` : ""}`).join("<br>")}</details>`
       : "";
-    const subjects = state.gmailDebug?.subjects?.length
-      ? `<br><br>取得件名<br>${state.gmailDebug.subjects.map((s) => `・${escapeHtml(s)}`).join("<br>")}`
-      : "";
-    const debug = state.gmailDebug ? `<br>検索範囲: ${escapeHtml(range)}<br>重複除外後: ${state.gmailDebug.total ?? 0}件 / 詳細取得: ${state.gmailDebug.fetched ?? 0}件${queryResults}${subjects}` : `<br>検索範囲: ${escapeHtml(range)}`;
+    const debugCard = `<div class="item level-low debug-card"><div class="item__meta">${account}検索範囲: ${escapeHtml(range)}<br>表示: 最大5件 / 検索結果: ${state.gmailDebug?.total ?? 0}件${queryResults}</div></div>`;
     $("gmailList").innerHTML = state.mails.length
-      ? state.mails.map(renderMail).join("") + `<div class="item level-low"><div class="item__title">🔎 Gmail検索条件</div><div class="item__meta">${account}${debug}</div></div>`
-      : `<div class="item level-low"><div class="item__title">🟢 対象メールなし</div><div class="item__meta">${account}昨日から現在までのGmailを確認しましたが、表示できるメールが見つかりませんでした。${debug}</div></div>`;
+      ? state.mails.slice(0, 5).map(renderMail).join("") + debugCard
+      : `<div class="item level-low"><div class="item__title">🟢 対象メールなし</div><div class="item__meta">${account}昨日から現在までのGmailを確認しましたが、表示できる重要メールは見つかりませんでした。</div></div>${debugCard}`;
   };
 
   setTimeout(async () => {
     try {
       if (state?.token) {
-        updateStatus("📩 Gmailを複数条件で再取得中...");
+        updateStatus("📩 Gmailを整理して再取得中...");
         state.mails = await loadImportantMails();
         renderMails();
         renderPriority();
         renderDailyAdvice();
         updateStatus(`✅ Gmailを再取得しました${state.googleEmail ? `（${state.googleEmail}）` : ""}`);
-      } else if ($("gmailList")) {
-        $("gmailList").innerHTML = `<div class="item level-warn"><div class="item__title">🔐 Gmail権限の取り直しが必要です</div><div class="item__meta">ページを再読み込み後、「Google連携」を押して、Gmailの読み取りを許可してください。</div></div>`;
       }
     } catch (error) {
       console.error(error);
