@@ -1,10 +1,37 @@
 // Google Tasks patch: show incomplete overdue tasks and incomplete tasks due within 7 days.
 (function(){
-  const TASKS_FIX_VERSION = "tasks-overdue-next7-v1";
+  const TASKS_FIX_VERSION = "tasks-overdue-next7-v2-friendly-error";
   const TOKEN_VERSION_TASKS = "google-tasks-readonly-v1";
   sessionStorage.setItem("dailyBriefingTasksFixVersion", TASKS_FIX_VERSION);
 
   const TASKS_SCOPE = "https://www.googleapis.com/auth/tasks.readonly";
+
+  function shortTasksError(error) {
+    const raw = String(error?.message || error || "");
+    try {
+      const jsonStart = raw.indexOf("{");
+      if (jsonStart >= 0) {
+        const parsed = JSON.parse(raw.slice(jsonStart));
+        const message = parsed?.error?.message || raw;
+        if (message.includes("Google Tasks API has not been used") || message.includes("disabled")) {
+          return {
+            kind: "api-disabled",
+            message: "Google Cloud側で Google Tasks API が有効化されていません。",
+            detail: "API とサービス → ライブラリ → Google Tasks API → 有効にする、を実行してください。"
+          };
+        }
+        if (message.includes("insufficient") || message.includes("PERMISSION_DENIED")) {
+          return {
+            kind: "permission",
+            message: "Google Tasks の読み取り権限が不足しています。",
+            detail: "Google Auth Platform のデータアクセスに tasks.readonly を追加し、Google連携を押し直してください。"
+          };
+        }
+        return { kind: "unknown", message: message.slice(0, 180), detail: "" };
+      }
+    } catch (_) {}
+    return { kind: "unknown", message: raw.slice(0, 180), detail: "" };
+  }
 
   function forceReauthForTasks() {
     const saved = sessionStorage.getItem("dailyBriefingTasksTokenVersion") || "";
@@ -106,7 +133,6 @@
   }
 
   function taskListUrl(taskListId, taskId) {
-    if (!taskListId || !taskId) return "https://calendar.google.com/calendar/u/0/r/tasks?tab=rc";
     return "https://calendar.google.com/calendar/u/0/r/tasks?tab=rc";
   }
 
@@ -170,7 +196,7 @@
     } catch (error) {
       console.warn("Google Tasks load failed", error);
       state.tasks = [];
-      state.tasksDebug = { error: String(error?.message || error || "") };
+      state.tasksDebug = { error: shortTasksError(error) };
     }
     renderTasks();
   }
@@ -210,7 +236,7 @@
     badge.textContent = overdue.length ? `期限切れ${overdue.length}件` : tasks.length ? `タスク${tasks.length}件` : "タスクなし";
     badge.className = "badge " + (overdue.length ? "badge-red" : tasks.length ? "badge-yellow" : "badge-green");
     const debug = state.tasksDebug?.error
-      ? `<div class="item level-warn"><div class="item__title">⚠️ Google Tasks取得エラー</div><div class="item__meta">${escapeHtml(state.tasksDebug.error)}</div></div>`
+      ? `<div class="item level-warn"><div class="item__title">⚠️ Google Tasks設定が必要です</div><div class="item__meta">${escapeHtml(state.tasksDebug.error.message || "Google Tasksの取得に失敗しました。")}<br>${escapeHtml(state.tasksDebug.error.detail || "")}</div></div>`
       : `<div class="item level-low debug-card"><div class="item__meta">対象: 期限切れの未完了 + 今日から7日先までの未完了<br>範囲: ${escapeHtml(state.tasksDebug?.range || tasksRange().display)}<br>タスクリスト: ${state.tasksDebug?.lists ?? 0}件 / 対象タスク: ${state.tasksDebug?.selected ?? 0}件</div></div>`;
     if (!tasks.length) {
       list.innerHTML = `<div class="item level-low"><div class="item__title">🟢 対象タスクなし</div><div class="item__meta">期限切れ、または今日から7日先までの未完了タスクはありません。</div></div>${debug}`;
