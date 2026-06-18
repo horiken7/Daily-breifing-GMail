@@ -1,6 +1,6 @@
 // Priority/advice wording patch: use only concrete facts from calendar data.
 (function(){
-  const PRIORITY_FIX_VERSION = "priority-calendar-facts-v1";
+  const PRIORITY_FIX_VERSION = "priority-calendar-facts-v2-no-mail-card";
   sessionStorage.setItem("dailyBriefingPriorityFixVersion", PRIORITY_FIX_VERSION);
 
   function toMinutes(value) {
@@ -75,14 +75,14 @@
     if (w.tempMax >= 30) items.push({ level: "warn", badge: "⚠️ 注意", title: "🥵 暑さ対策", meta: `最高気温は${w.tempMax}℃です。` });
     if (w.wind >= 35) items.push({ level: "warn", badge: "⚠️ 注意", title: "💨 強めの風", meta: `最大風速は${w.wind}km/hです。` });
 
-    const highMails = state.mails.filter((m) => m.level === "high");
-    if (highMails.length) items.unshift({ level: "high", badge: "🔴 重要", title: `📩 重要メール ${highMails.length}件`, meta: highMails.slice(0, 3).map((mail) => escapeHtml(mail.subject || "件名なし")).join("<br>") });
+    // 重要メールは下部の「📩 重要メール」欄だけに表示する。
+    // 上部の「今日の重要事項」にはメール件数カードを出さない。
 
     if (state.events.length) {
       items.push({ level: "mid", badge: "🟡 予定", title: `📅 今日の予定 ${state.events.length}件`, meta: buildCalendarFacts(state.events) });
     }
 
-    if (!items.length) items.push({ level: "low", badge: "🟢 通常", title: "✅ 大きな注意事項は少なめ", meta: "予定・重要メール・天気の注意は少なめです。" });
+    if (!items.length) items.push({ level: "low", badge: "🟢 通常", title: "✅ 大きな注意事項は少なめ", meta: "予定・天気の注意は少なめです。" });
 
     $("priorityBadge").textContent = items.some((i) => i.level === "high") ? "🔴 要対応" : items.some((i) => i.level === "warn" || i.level === "mid") ? "🟡 確認" : "🟢 通常";
     $("priorityBadge").className = "badge " + (items.some((i) => i.level === "high") ? "badge-red" : items.some((i) => i.level === "warn" || i.level === "mid") ? "badge-yellow" : "badge-green");
