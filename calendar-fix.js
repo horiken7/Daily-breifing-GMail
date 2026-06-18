@@ -1,5 +1,5 @@
 (function(){
-  const FIX_VERSION = "calendar-detail-v9";
+  const FIX_VERSION = "calendar-detail-v10";
   const INCLUDED_CALENDAR_NAMES = new Set(["日本の祝日", "Trip", "Special day", "Work", "Home"]);
   const EVENT_COLORS = {
     "1": "#7986cb", "2": "#33b679", "3": "#8e24aa", "4": "#e67c73", "5": "#f6c026", "6": "#f4511e",
@@ -122,21 +122,55 @@
       const name = calendarDisplayName(calendar);
       try {
         const events = await fetchCalendarEvents(calendar, start, end);
-        debug.push({ name, count: events.length, selected: calendar.selected !== false });
+        debug.push({ name, count: events.length, selected: calendar.selected !== false, titles: events.map((event) => event.title).slice(0, 10) });
         return events;
       } catch (error) {
         console.warn(`skip calendar: ${name}`, error);
-        debug.push({ name, count: 0, error: true, selected: calendar.selected !== false });
+        debug.push({ name, count: 0, error: true, selected: calendar.selected !== false, titles: [] });
         return [];
       }
     }));
     const unique = new Map();
     eventLists.flat().forEach((event) => {
+      if (!event) return;
       const key = `${event.calendarId || ""}:${event.id || ""}:${event.start || event.dateSort}:${event.title}`;
       unique.set(key, event);
     });
-    state.calendarDebug = { start, end, display, calendars: debug };
-    return [...unique.values()].filter((event) => event.status !== "cancelled").sort((a, b) => new Date(a.start || a.dateSort) - new Date(b.start || b.dateSort));
+    const result = [...unique.values()]
+      .filter((event) => (event.status || "confirmed") !== "cancelled")
+      .sort((a, b) => new Date(a.start || a.dateSort) - new Date(b.start || b.dateSort));
+    state.calendarDebug = { start, end, display, calendars: debug, rawEventCount: eventLists.flat().length, resultCount: result.length };
+    return result;
+  };
+
+  loadGoogleData = async function() {
+    if (!state.token) return;
+
+    try {
+      const profile = await loadGoogleProfile();
+      state.googleEmail = profile?.emailAddress || state.googleEmail || "";
+    } catch (error) {
+      console.warn("Google profile skipped", error);
+    }
+
+    try {
+      state.events = await loadTodayCalendarEvents();
+    } catch (error) {
+      console.error("Calendar load failed", error);
+      state.events = [];
+      state.calendarDebug = state.calendarDebug || { error: String(error) };
+    }
+
+    try {
+      state.mails = await loadImportantMails();
+    } catch (error) {
+      console.warn("Gmail load skipped", error);
+      state.mails = [];
+      $("gmailList").innerHTML = `<div class="item level-warn"><div class="item__title">⚠️ Gmail取得をスキップ</div><div class="item__meta">予定表示を優先しました。Gmail権限または通信状態を確認してください。</div></div>`;
+    }
+
+    renderCalendar();
+    renderMails();
   };
 
   function formatEventTime(event) {
@@ -178,9 +212,13 @@
 
     const found = state.calendarNames?.length ? state.calendarNames.join(" / ") : "対象カレンダーを検出できませんでした";
     const counts = state.calendarDebug?.calendars?.length
-      ? state.calendarDebug.calendars.map((calendar) => `${calendar.count > 0 ? "🟡" : calendar.error ? "⚠️" : "⚪"} ${escapeHtml(calendar.name)}: ${calendar.error ? "取得不可" : `${calendar.count}件`}`).join("<br>")
+      ? state.calendarDebug.calendars.map((calendar) => {
+          const titleText = calendar.titles?.length ? `：${calendar.titles.map(escapeHtml).join(" / ")}` : "";
+          return `${calendar.count > 0 ? "🟡" : calendar.error ? "⚠️" : "⚪"} ${escapeHtml(calendar.name)}: ${calendar.error ? "取得不可" : `${calendar.count}件${titleText}`}`;
+        }).join("<br>")
       : "取得結果なし";
-    $("calendarList").innerHTML = `<div class="item level-low"><div class="item__title">🟢 今日の予定はありません</div><div class="item__meta">${escapeHtml(range)}<br>🎯 表示対象: ${escapeHtml(target)}<br>検出した対象: ${escapeHtml(found)}<br><br>📊 取得結果<br>${counts}</div></div>`;
+    const raw = state.calendarDebug ? `<br>raw:${state.calendarDebug.rawEventCount ?? "-"} / result:${state.calendarDebug.resultCount ?? "-"}` : "";
+    $("calendarList").innerHTML = `<div class="item level-low"><div class="item__title">🟢 今日の予定はありません</div><div class="item__meta">${escapeHtml(range)}<br>🎯 表示対象: ${escapeHtml(target)}<br>検出した対象: ${escapeHtml(found)}${raw}<br><br>📊 取得結果<br>${counts}</div></div>`;
   };
 
   setTimeout(async () => {
