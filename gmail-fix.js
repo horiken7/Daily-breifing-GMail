@@ -1,6 +1,10 @@
 (function(){
-  const GMAIL_FIX_VERSION = "gmail-multi-query-v2";
-  sessionStorage.setItem("dailyBriefingGmailFixVersion", GMAIL_FIX_VERSION);
+  const GMAIL_FIX_VERSION = "gmail-force-scope-reset-v3";
+  const saved = sessionStorage.getItem("dailyBriefingGmailFixVersion") || "";
+  if (saved !== GMAIL_FIX_VERSION) {
+    sessionStorage.removeItem("dailyBriefingGoogleToken");
+    sessionStorage.setItem("dailyBriefingGmailFixVersion", GMAIL_FIX_VERSION);
+  }
 
   function tokyoYmdParts(date = new Date()) {
     const parts = new Intl.DateTimeFormat("ja-JP", {
@@ -36,6 +40,20 @@
     };
   }
 
+  function shortError(error) {
+    try {
+      const text = String(error?.message || error || "");
+      const jsonStart = text.indexOf("{");
+      if (jsonStart >= 0) {
+        const parsed = JSON.parse(text.slice(jsonStart));
+        return parsed.error?.message || parsed.error?.status || text.slice(0, 160);
+      }
+      return text.slice(0, 180);
+    } catch (_) {
+      return String(error || "unknown error").slice(0, 180);
+    }
+  }
+
   async function searchMessageIds(query, maxResults = 30) {
     const params = new URLSearchParams({
       q: query,
@@ -52,9 +70,11 @@
     const queries = [
       { label: "広め", q: `in:anywhere newer_than:3d` },
       { label: "昨日以降", q: `in:anywhere ${range.query}` },
-      { label: "Gemini", q: `in:anywhere (Gemini OR Imagen OR "Google AI Studio" OR "Google Cloud") newer_than:30d` },
-      { label: "対応お願い", q: `in:anywhere ("ご対応のお願い" OR "Action Required" OR upgrade OR アップグレード) newer_than:30d` },
-      { label: "Imagen直接", q: `in:anywhere Imagen newer_than:60d` }
+      { label: "Gemini", q: `in:anywhere Gemini newer_than:60d` },
+      { label: "Imagen", q: `in:anywhere Imagen newer_than:60d` },
+      { label: "Google AI Studio", q: `in:anywhere from:googleaistudio-noreply@google.com newer_than:60d` },
+      { label: "対応お願い", q: `in:anywhere "ご対応のお願い" newer_than:60d` },
+      { label: "Action Required", q: `in:anywhere "Action Required" newer_than:60d` }
     ];
 
     state.gmailDebug = { range: range.display, query: queries.map((x) => `${x.label}: ${x.q}`).join(" / "), total: 0, fetched: 0, queryResults: [] };
@@ -62,12 +82,13 @@
     const idMap = new Map();
     for (const item of queries) {
       try {
-        const messages = await searchMessageIds(item.q, item.label === "広め" ? 60 : 20);
+        const messages = await searchMessageIds(item.q, item.label === "広め" ? 80 : 30);
         state.gmailDebug.queryResults.push({ label: item.label, q: item.q, count: messages.length });
         messages.forEach((msg) => idMap.set(msg.id, msg));
       } catch (error) {
+        const message = shortError(error);
         console.warn(`Gmail検索に失敗: ${item.label}`, error);
-        state.gmailDebug.queryResults.push({ label: item.label, q: item.q, count: 0, error: true });
+        state.gmailDebug.queryResults.push({ label: item.label, q: item.q, count: 0, error: true, message });
       }
     }
 
@@ -180,7 +201,7 @@
     const account = state.googleEmail ? `接続中: ${escapeHtml(state.googleEmail)}<br>` : "";
     const range = state.gmailDebug?.range || mailRangeLabel().display;
     const queryResults = state.gmailDebug?.queryResults?.length
-      ? `<br><br>検索別結果<br>${state.gmailDebug.queryResults.map((r) => `${r.error ? "⚠️" : "🔎"} ${escapeHtml(r.label)}: ${r.count}件`).join("<br>")}`
+      ? `<br><br>検索別結果<br>${state.gmailDebug.queryResults.map((r) => `${r.error ? "⚠️" : "🔎"} ${escapeHtml(r.label)}: ${r.count}件${r.message ? `：${escapeHtml(r.message)}` : ""}`).join("<br>")}`
       : "";
     const subjects = state.gmailDebug?.subjects?.length
       ? `<br><br>取得件名<br>${state.gmailDebug.subjects.map((s) => `・${escapeHtml(s)}`).join("<br>")}`
@@ -200,6 +221,8 @@
         renderPriority();
         renderDailyAdvice();
         updateStatus(`✅ Gmailを再取得しました${state.googleEmail ? `（${state.googleEmail}）` : ""}`);
+      } else if ($("gmailList")) {
+        $("gmailList").innerHTML = `<div class="item level-warn"><div class="item__title">🔐 Gmail権限の取り直しが必要です</div><div class="item__meta">ページを再読み込み後、「Google連携」を押して、Gmailの読み取りを許可してください。</div></div>`;
       }
     } catch (error) {
       console.error(error);
