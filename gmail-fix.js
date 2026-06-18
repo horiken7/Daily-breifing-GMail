@@ -1,5 +1,5 @@
 (function(){
-  const GMAIL_FIX_VERSION = "gmail-clean-priority-v4";
+  const GMAIL_FIX_VERSION = "gmail-no-alerts-promotions-v5";
   const saved = sessionStorage.getItem("dailyBriefingGmailFixVersion") || "";
   if (saved !== GMAIL_FIX_VERSION) {
     sessionStorage.setItem("dailyBriefingGmailFixVersion", GMAIL_FIX_VERSION);
@@ -65,11 +65,28 @@
   }
 
   function isNoiseMail(mail) {
-    const text = `${mail.subject} ${mail.from} ${mail.snippet}`.toLowerCase();
-    if (text.includes("google アラート") || text.includes("google alert")) return true;
+    const text = `${mail.subject} ${mail.from} ${mail.snippet} ${mail.body || ""}`.toLowerCase();
+    const labels = mail.labels || [];
+
+    // Googleアラートは常に非表示
+    if (text.includes("google アラート") || text.includes("google alert") || text.includes("googlealerts-noreply")) return true;
+
+    // Gmailのプロモーション分類は常に非表示
+    if (labels.includes("CATEGORY_PROMOTIONS")) return true;
+
+    // 明らかな広告・販促・クーポン系は非表示
+    const promoWords = [
+      "promotion", "promotions", "campaign", "coupon", "sale", "discount", "off", "newsletter",
+      "キャンペーン", "クーポン", "セール", "割引", "最大", "%off", "％off", "引換券", "チャンス",
+      "大感謝祭", "リッチクーポン", "プロモーション", "ニュースレター", "メルマガ", "新登場"
+    ];
+    if (promoWords.some((w) => text.includes(w.toLowerCase()))) return true;
+
+    // 今回ノイズになっていた差出人・件名系
+    if (text.includes("google home") || text.includes("スピーカー")) return true;
     if (text.includes("global ai hackathon") || text.includes("hackathon")) return true;
-    if (text.includes("newsletter") || text.includes("ニュースレター") || text.includes("campaign") || text.includes("キャンペーン")) return true;
-    if (text.includes("新登場") || text.includes("スピーカー") || text.includes("google home")) return true;
+    if (text.includes("くすりエクスプレス") || text.includes("vpass.ne.jp")) return true;
+
     return false;
   }
 
@@ -85,13 +102,13 @@
   loadImportantMails = async function() {
     const range = mailRangeLabel();
     const queries = [
-      { label: "昨日以降", q: `in:anywhere ${range.query}`, max: 50 },
-      { label: "配送遅延", q: `in:anywhere (配送 OR 配達 OR 遅延 OR お届け OR delivery OR shipping OR delayed) newer_than:14d`, max: 30 },
-      { label: "重要語", q: `in:anywhere (重要 OR 至急 OR 期限 OR 要対応 OR ご対応のお願い OR Action Required) newer_than:14d`, max: 30 },
-      { label: "Google AI", q: `in:anywhere (Gemini OR Imagen OR "Google AI Studio" OR "Google Cloud") newer_than:30d`, max: 20 }
+      { label: "昨日以降", q: `in:anywhere ${range.query} -category:promotions`, max: 50 },
+      { label: "配送遅延", q: `in:anywhere (配送 OR 配達 OR 遅延 OR お届け OR delivery OR shipping OR delayed) newer_than:14d -category:promotions`, max: 30 },
+      { label: "重要語", q: `in:anywhere (重要 OR 至急 OR 期限 OR 要対応 OR ご対応のお願い OR Action Required) newer_than:14d -category:promotions`, max: 30 },
+      { label: "Google AI", q: `in:anywhere (Gemini OR Imagen OR "Google AI Studio" OR "Google Cloud") newer_than:30d -category:promotions`, max: 20 }
     ];
 
-    state.gmailDebug = { range: range.display, total: 0, fetched: 0, queryResults: [] };
+    state.gmailDebug = { range: range.display, total: 0, fetched: 0, removed: 0, queryResults: [] };
 
     const idMap = new Map();
     for (const item of queries) {
@@ -120,16 +137,18 @@
     state.gmailDebug.fetched = details.length;
     state.gmailDebug.subjects = details.slice(0, 8).map((mail) => mail.subject);
 
-    const scored = details
+    const filtered = details.filter((mail) => !isNoiseMail(mail));
+    state.gmailDebug.removed = details.length - filtered.length;
+
+    const scored = filtered
       .map(scoreMail)
-      .filter((mail) => !isNoiseMail(mail) || mail.score >= 80)
       .sort((a, b) => b.score - a.score);
 
     const important = scored
       .filter((mail) => mail.score >= 45 && mail.level !== "low")
       .slice(0, 5);
 
-    if (important.length) return important.slice(0, 5);
+    if (important.length) return important;
 
     return scored.slice(0, 3).map((mail) => ({
       ...mail,
@@ -180,7 +199,6 @@
         badge = "🔴 重要";
       }
     }
-    // Google/API系は「配送・セキュリティ・支払い」より低め。件名に分類名は付けない。
     if (googleApiWords.some((w) => text.includes(w.toLowerCase()) || original.includes(w))) {
       score += 18;
       if (category === "確認") category = "Google/API通知";
@@ -188,12 +206,6 @@
         level = "mid";
         badge = "🟡 確認";
       }
-    }
-    if (isNoiseMail(mail) && score < 80) {
-      score -= 50;
-      level = "low";
-      badge = "🟢 通常";
-      if (category === "確認") category = "通常";
     }
 
     if (score >= 70) {
@@ -238,7 +250,7 @@
     const queryResults = state.gmailDebug?.queryResults?.length
       ? `<details class="debug-details"><summary>🔎 Gmail検索条件</summary>${state.gmailDebug.queryResults.map((r) => `${r.error ? "⚠️" : "🔎"} ${escapeHtml(r.label)}: ${r.count}件${r.message ? `：${escapeHtml(r.message)}` : ""}`).join("<br>")}</details>`
       : "";
-    const debugCard = `<div class="item level-low debug-card"><div class="item__meta">${account}検索範囲: ${escapeHtml(range)}<br>表示: 最大5件 / 検索結果: ${state.gmailDebug?.total ?? 0}件${queryResults}</div></div>`;
+    const debugCard = `<div class="item level-low debug-card"><div class="item__meta">${account}検索範囲: ${escapeHtml(range)}<br>表示: 最大5件 / 検索結果: ${state.gmailDebug?.total ?? 0}件 / 非表示: ${state.gmailDebug?.removed ?? 0}件${queryResults}</div></div>`;
     $("gmailList").innerHTML = state.mails.length
       ? state.mails.slice(0, 5).map(renderMail).join("") + debugCard
       : `<div class="item level-low"><div class="item__title">🟢 対象メールなし</div><div class="item__meta">${account}昨日から現在までのGmailを確認しましたが、表示できる重要メールは見つかりませんでした。</div></div>${debugCard}`;
