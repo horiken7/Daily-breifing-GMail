@@ -27,9 +27,7 @@
           <h2 id="priorityTitle">🔴 今日の重要事項</h2>
           <span id="priorityBadge" class="badge badge-red">確認中</span>
         </div>
-        <div id="priorityList" class="item-list skeleton-lines">
-          <p>情報を集めています...</p>
-        </div>
+        <div id="priorityList" class="item-list skeleton-lines"><p>情報を集めています...</p></div>
       </section>
 
       <section class="card" aria-labelledby="weatherTitle">
@@ -39,19 +37,14 @@
         </div>
         <div id="weatherSummary" class="weather-main">
           <div class="weather-icon">🌤️</div>
-          <div>
-            <p class="weather-name">天気を取得中...</p>
-            <p class="muted">位置情報の許可で精度が上がります</p>
-          </div>
+          <div><p class="weather-name">天気を取得中...</p><p class="muted">位置情報の許可で精度が上がります</p></div>
         </div>
         <div id="weatherMetrics" class="metric-grid"></div>
       </section>
 
       <section class="card" aria-labelledby="clothesTitle">
         <h2 id="clothesTitle">👕 服装アドバイス</h2>
-        <div id="clothesAdvice" class="chip-list">
-          <span class="chip">🌡️ 気温を確認中</span>
-        </div>
+        <div id="clothesAdvice" class="chip-list"><span class="chip">🌡️ 気温を確認中</span></div>
       </section>
 
       <section class="card" aria-labelledby="calendarTitle">
@@ -59,9 +52,7 @@
           <h2 id="calendarTitle">📅 今日の予定</h2>
           <span id="calendarBadge" class="badge">未接続</span>
         </div>
-        <div id="calendarList" class="item-list">
-          <p class="muted">🔐 Google連携後、今日の予定を表示します。</p>
-        </div>
+        <div id="calendarList" class="item-list"><p class="muted">🔐 Google連携後、今日の予定を表示します。</p></div>
       </section>
 
       <section class="card" aria-labelledby="gmailTitle">
@@ -69,26 +60,21 @@
           <h2 id="gmailTitle">📩 重要メール</h2>
           <span id="gmailBadge" class="badge">未接続</span>
         </div>
-        <div id="gmailList" class="item-list">
-          <p class="muted">🔐 Google連携後、直近7日のメール本文を確認し、重要メールまたは直近メールを要約します。</p>
-        </div>
+        <div id="gmailList" class="item-list"><p class="muted">🔐 Google連携後、直近の重要メールを表示します。</p></div>
       </section>
 
       <section class="card advice-card" aria-labelledby="adviceTitle">
         <h2 id="adviceTitle">🧭 今日の過ごし方</h2>
-        <div id="dailyAdvice" class="advice-list">
-          <p>☕ まずは天気を確認して、今日の動き方を組み立てます。</p>
-        </div>
+        <div id="dailyAdvice" class="advice-list"><p>☕ まずは天気を確認して、今日の動き方を組み立てます。</p></div>
       </section>
     </main>
 
-    <footer class="footer-note">
-      <p>🔒 Google連携は読み取り専用です。Gmail本文は重要度判定と要約表示のために、このブラウザ上で確認します。</p>
-    </footer>
+    <footer class="footer-note"><p>🔒 Google連携は読み取り専用です。</p></footer>
   </div>
 
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="./config.js"></script>
   <script src="./app.js"></script>
+  <script src="./calendar-fix.js"></script>
 </body>
 </html>
