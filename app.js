@@ -92,7 +92,7 @@ function initGoogleWhenReady(retry = 0) {
       state.token = response.access_token;
       sessionStorage.setItem("dailyBriefingGoogleToken", state.token);
       $("googleBtn").textContent = "✅ Google連携済み";
-      updateStatus("📅📩 Googleから今日の予定と重要メールを取得中...");
+      updateStatus("📅📩 Googleから今日の予定とメールを取得中...");
       await loadGoogleData();
       renderAll();
       updateStatus("✅ Google連携データを表示しました");
@@ -175,10 +175,10 @@ function normalizeEvent(event) {
 }
 
 async function loadImportantMails() {
-  const query = "newer_than:2d -category:promotions -category:social";
+  const query = "newer_than:7d";
   const params = new URLSearchParams({
     q: query,
-    maxResults: "20",
+    maxResults: "30",
     includeSpamTrash: "false"
   });
   const listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params}`;
@@ -186,18 +186,29 @@ async function loadImportantMails() {
   const messages = list.messages || [];
   if (!messages.length) return [];
 
-  const details = await Promise.all(messages.slice(0, 12).map(async (msg) => {
+  const details = await Promise.all(messages.slice(0, 15).map(async (msg) => {
     const params = new URLSearchParams({ format: "full" });
     const detailUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?${params}`;
     const detail = await googleFetch(detailUrl);
     return normalizeMail(detail);
   }));
 
-  return details
+  const scored = details
     .map(scoreMail)
+    .sort((a, b) => b.score - a.score);
+  const important = scored
     .filter((mail) => mail.score >= 22 && mail.level !== "low")
-    .sort((a, b) => b.score - a.score)
     .slice(0, 5);
+
+  if (important.length) return important;
+
+  return scored.slice(0, 5).map((mail) => ({
+    ...mail,
+    level: "low",
+    badge: "🟢 通常",
+    type: mail.type === "📩 確認" ? "📩 直近メール" : mail.type,
+    summary: mail.summary || mail.snippet || "本文の要約はありません。"
+  }));
 }
 
 function normalizeMail(message) {
@@ -550,11 +561,13 @@ function renderMails() {
     $("gmailBadge").textContent = "未接続";
     return;
   }
-  $("gmailBadge").textContent = state.mails.length ? `${state.mails.length}件` : "重要なし";
-  $("gmailBadge").className = "badge " + (state.mails.some((m) => m.level === "high") ? "badge-red" : state.mails.length ? "badge-yellow" : "badge-green");
+  const highCount = state.mails.filter((m) => m.level === "high").length;
+  const checkCount = state.mails.filter((m) => m.level === "warn" || m.level === "mid").length;
+  $("gmailBadge").textContent = highCount ? `重要${highCount}件` : checkCount ? `確認${checkCount}件` : state.mails.length ? "直近表示" : "メールなし";
+  $("gmailBadge").className = "badge " + (highCount ? "badge-red" : checkCount ? "badge-yellow" : "badge-green");
   $("gmailList").innerHTML = state.mails.length
     ? state.mails.map(renderMail).join("")
-    : `<div class="item level-low"><div class="item__title">🟢 重要メールは少なめ</div><div class="item__meta">直近2日の本文を確認し、重要度が高そうなメールは見つかりませんでした。</div></div>`;
+    : `<div class="item level-low"><div class="item__title">🟢 直近メールなし</div><div class="item__meta">直近7日のGmailを確認しましたが、表示できるメールが見つかりませんでした。</div></div>`;
 }
 
 function renderMail(mail) {
@@ -566,6 +579,7 @@ function renderMail(mail) {
       </div>
       <div class="item__meta">From: ${escapeHtml(mail.from)}</div>
       <div class="item__meta">📝 ${escapeHtml(mail.summary)}</div>
+      <div class="item__meta">重要度: ${Math.max(0, mail.score)}点</div>
     </div>
   `;
 }
@@ -597,7 +611,7 @@ function renderGoogleDisconnected() {
   $("calendarBadge").textContent = "未接続";
   $("gmailBadge").textContent = "未接続";
   $("calendarList").innerHTML = `<div class="item level-mid"><div class="item__title">📅 Google連携待ち</div><div class="item__meta">「🔐 Google連携」を押すと、今日の予定を読み取ります。</div></div>`;
-  $("gmailList").innerHTML = `<div class="item level-mid"><div class="item__title">📩 Google連携待ち</div><div class="item__meta">「🔐 Google連携」を押すと、直近メールの本文を確認し、重要なものだけ要約します。</div></div>`;
+  $("gmailList").innerHTML = `<div class="item level-mid"><div class="item__title">📩 Google連携待ち</div><div class="item__meta">「🔐 Google連携」を押すと、直近7日のメール本文を確認し、重要メールまたは直近メールを要約します。</div></div>`;
 }
 
 function renderGoogleSetupGuide() {
