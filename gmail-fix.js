@@ -1,5 +1,5 @@
 (function(){
-  const GMAIL_FIX_VERSION = "gmail-link-to-message-v7";
+  const GMAIL_FIX_VERSION = "gmail-link-to-message-v8-quora-filter";
   const saved = sessionStorage.getItem("dailyBriefingGmailFixVersion") || "";
   if (saved !== GMAIL_FIX_VERSION) {
     sessionStorage.setItem("dailyBriefingGmailFixVersion", GMAIL_FIX_VERSION);
@@ -69,6 +69,7 @@
     const labels = mail.labels || [];
 
     if (text.includes("google アラート") || text.includes("google alert") || text.includes("googlealerts-noreply")) return true;
+    if (text.includes("quoraダイジェスト") || text.includes("quora ダイジェスト") || text.includes("quora digest") || text.includes("quora.com")) return true;
     if (labels.includes("CATEGORY_PROMOTIONS")) return true;
     if (text.includes("配送中") || text.includes("配達完了") || text.includes("到着済み") || text.includes("お届け済み") || text.includes("注文履歴 配送状況")) return true;
 
